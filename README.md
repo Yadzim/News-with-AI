@@ -25,6 +25,15 @@ npm run fetch    # Bir martalik RSS + AI (test)
 
 **Eslatma:** `admin` ichida ham schedule bor — `cron` bilan birga ishlatmang (ikki marta yuboriladi).
 
+## Serverga o‘rnatish
+
+To‘liq yo‘riqnoma: [`deploy/SERVER.md`](deploy/SERVER.md)
+
+- Node 20 + nginx + HTTPS
+- PM2: `news-bot` + `news-admin`
+- Mini App / BotFather Menu Button
+- Yangilash va troubleshooting
+
 ## Admin panel
 
 ```bash
@@ -38,7 +47,8 @@ Imkoniyatlar:
 - **Telegramga yuborish** (pending)
 - Yuborish vaqtini sozlash (ertalab / kechqurun, Asia/Tashkent)
 
-Nginx: [`deploy/nginx.admin.conf.example`](deploy/nginx.admin.conf.example) — `public/` ni static, `/api/` ni Node `8787` ga proxy.
+Nginx: [`deploy/nginx.admin.conf.example`](deploy/nginx.admin.conf.example) — `public/` ni static, `/api/` ni Node `8787` ga proxy.  
+Server setup: [`deploy/SERVER.md`](deploy/SERVER.md).
 
 Cronni darhol ishlatish:
 
