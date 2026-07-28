@@ -1,0 +1,35 @@
+{
+  "name": "news-bot",
+  "version": "1.0.0",
+  "description": "AI News Aggregator & Telegram Bot — RSS → Gemini → Telegram Topics",
+  "type": "module",
+  "scripts": {
+    "bot": "tsx src/index.ts",
+    "cron": "tsx src/cron.ts",
+    "admin": "tsx src/server.ts",
+    "fetch": "tsx src/fetch-once.ts",
+    "pipeline": "tsx src/run-pipeline.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "better-sqlite3": "^11.9.1",
+    "dotenv": "^16.5.0",
+    "express": "^5.2.1",
+    "grammy": "^1.36.0",
+    "node-cron": "^3.0.3",
+    "rss-parser": "^3.13.0",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.15.3",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

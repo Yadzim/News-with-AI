@@ -1,0 +1,44 @@
+# AI News Bot — Admin / Mini App (nginx)
+
+Static UI: `public/`
+API: Node (`src/server.ts`) port `8787`
+
+## Telegram Mini App
+
+1. HTTPS orqali oching (Telegram Mini App uchun majburiy).
+2. BotFather → Bot Settings → Menu Button → URL: `https://your-domain/`
+3. `.env` ga qo‘ying: `WEBAPP_URL=https://your-domain/`
+4. `/start` da **Mini App — o‘qish** tugmasi chiqadi.
+
+## nginx misol
+
+```nginx
+server {
+    listen 80;
+    server_name news-admin.example.com;
+
+    root /var/www/news-bot/public;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+## Serverda
+
+```bash
+cd /var/www/news-bot
+npm ci
+npm run admin
+```
