@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Serverda: cd /var/www/news-bot && ./deploy.sh
+# Kod allaqachon yangilangan bo‘lishi mumkin; pull shu yerda ham qilinadi.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -7,28 +9,45 @@ cd "$ROOT"
 BOT_SVC="${SERVICE_BOT:-news-bot}"
 ADMIN_SVC="${SERVICE_ADMIN:-news-admin}"
 
-echo "==> git pull"
-git pull origin main
+echo "==> git sync"
+git fetch origin main
+git reset --hard origin/main
 
-# Faqat lock o‘zgaganda npm ci (tez deploy)
-NEED_INSTALL=0
-if [[ ! -d node_modules ]]; then
-  NEED_INSTALL=1
-elif ! git diff --quiet HEAD@{1} HEAD -- package-lock.json package.json 2>/dev/null; then
-  NEED_INSTALL=1
-fi
-
-if [[ "$NEED_INSTALL" -eq 1 ]]; then
-  echo "==> npm ci (dependencies o‘zgargan)"
-  npm ci --omit=dev
+echo "==> dependencies"
+if [[ -d node_modules ]] && git diff --quiet HEAD@{1} HEAD -- package-lock.json package.json 2>/dev/null; then
+  echo "npm ci skip"
 else
-  echo "==> npm ci skip (dependencies o‘zgarmagan)"
+  npm ci --omit=dev
 fi
 
-echo "==> systemctl restart $BOT_SVC $ADMIN_SVC"
-sudo systemctl restart "$BOT_SVC" "$ADMIN_SVC"
+# sudo parol so‘rasa darhol fail (Actions’da osilib qolmasin)
+SUDO=(sudo -n)
 
-# status --full ba’zan osilib timeout beradi — faqat active tekshiramiz
-sleep 1
-sudo systemctl is-active "$BOT_SVC" "$ADMIN_SVC"
+restart_svc() {
+  local svc="$1"
+  echo "==> restart $svc"
+
+  # stop uzoq kutmasin
+  "${SUDO[@]}" systemctl stop "$svc" >/dev/null 2>&1 || true
+
+  # hali tirik bo‘lsa majburiy o‘chirish
+  if systemctl is-active --quiet "$svc" 2>/dev/null; then
+    echo "force kill $svc"
+    "${SUDO[@]}" systemctl kill -s SIGKILL "$svc" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+
+  "${SUDO[@]}" systemctl start "$svc"
+  sleep 1
+
+  if ! systemctl is-active --quiet "$svc"; then
+    echo "ERROR: $svc active emas"
+    "${SUDO[@]}" systemctl --no-pager -l status "$svc" || true
+    exit 1
+  fi
+  echo "$svc OK"
+}
+
+restart_svc "$BOT_SVC"
+restart_svc "$ADMIN_SVC"
 echo "==> deploy OK"

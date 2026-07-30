@@ -12,6 +12,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check deploy secrets
         env:
@@ -20,17 +21,12 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_KEY }}
         run: |
           missing=0
-          if [ -z "$SSH_HOST" ]; then echo "::error::SSH_HOST secret yo‘q yoki bo‘sh"; missing=1; fi
-          if [ -z "$SSH_USER" ]; then echo "::error::SSH_USER secret yo‘q yoki bo‘sh"; missing=1; fi
-          if [ -z "$SSH_KEY" ]; then echo "::error::SSH_KEY secret yo‘q yoki bo‘sh"; missing=1; fi
-          if [ "$missing" -eq 1 ]; then
-            echo "Repo → Settings → Secrets and variables → Actions ga qo‘ying:"
-            echo "  SSH_HOST / SSH_USER / SSH_KEY"
-            exit 1
-          fi
-          echo "Secrets OK"
+          if [ -z "$SSH_HOST" ]; then echo "::error::SSH_HOST secret yo‘q"; missing=1; fi
+          if [ -z "$SSH_USER" ]; then echo "::error::SSH_USER secret yo‘q"; missing=1; fi
+          if [ -z "$SSH_KEY" ]; then echo "::error::SSH_KEY secret yo‘q"; missing=1; fi
+          if [ "$missing" -eq 1 ]; then exit 1; fi
 
-      - name: Deploy via ./deploy.sh
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -39,11 +35,14 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           request_pty: true
           script_stop: true
-          command_timeout: 10m
+          command_timeout: 2m
           envs: SERVICE_BOT,SERVICE_ADMIN
           script: |
             set -e
             cd /var/www/news-bot
+            # Avval yangi deploy.sh ni tortib olamiz (eski skript osilib qolmasin)
+            git fetch origin main
+            git reset --hard origin/main
             chmod +x ./deploy.sh
             ./deploy.sh
         env:

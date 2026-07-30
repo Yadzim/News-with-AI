@@ -245,7 +245,25 @@ Repo → **Settings → Secrets and variables → Actions**:
 | `SERVICE_BOT` | Ixtiyoriy, default `news-bot` |
 | `SERVICE_ADMIN` | Ixtiyoriy, default `news-admin` |
 
-SSH user `sudo systemctl restart` qila olishi kerak (passwordless sudo tavsiya).
+SSH user `sudo systemctl` ni **parolsiz** qila olishi shart (`sudo -n`):
+
+```bash
+# YOUR_USER ni SSH user bilan almashtiring
+echo 'YOUR_USER ALL=(ALL) NOPASSWD: /bin/systemctl' | sudo tee /etc/sudoers.d/news-deploy
+sudo chmod 440 /etc/sudoers.d/news-deploy
+```
+
+Service fayllarda `TimeoutStopSec=10` va `KillMode=mixed` bo‘lsin — aks holda `systemctl restart` Actions’da osilib qoladi.
+Misollar: `deploy/news-bot.service.example`, `deploy/news-admin.service.example`.
+
+Yangilash:
+
+```bash
+sudo cp deploy/news-bot.service.example /etc/systemd/system/news-bot.service
+sudo cp deploy/news-admin.service.example /etc/systemd/system/news-admin.service
+# User/path ni moslang
+sudo systemctl daemon-reload
+```
 
 ---
 

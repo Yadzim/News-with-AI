@@ -6,10 +6,13 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=/var/www/news-bot
-EnvironmentFile=/var/www/news-bot/.env
-ExecStart=/usr/bin/npm run bot
+EnvironmentFile=-/var/www/news-bot/.env
+ExecStart=/usr/bin/npx tsx src/index.ts
 Restart=always
-RestartSec=5
+RestartSec=3
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGTERM
 Environment=NODE_ENV=production
 
 [Install]
