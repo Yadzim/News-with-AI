@@ -31,7 +31,7 @@ jobs:
             echo "  SSH_PORT  = ixtiyoriy (default 22)"
             exit 1
           fi
-          echo "Secrets OK (host=${#SSH_HOST} chars, user=${#SSH_USER} chars)"
+          echo "Secrets OK"
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
@@ -47,5 +47,18 @@ jobs:
             cd /var/www/news-bot
             git pull origin main
             npm ci
-            pm2 restart news-bot news-admin
+
+            # Birinchi deployda start, keyingilarida restart
+            start_or_restart() {
+              local name="$1"
+              if pm2 describe "$name" >/dev/null 2>&1; then
+                pm2 restart "$name" --update-env
+              else
+                pm2 start ecosystem.config.cjs --only "$name" --update-env
+              fi
+            }
+
+            start_or_restart news-bot
+            start_or_restart news-admin
+            pm2 save
             pm2 status

@@ -95,8 +95,10 @@ mkdir -p data
 ```bash
 sudo npm i -g pm2
 
-pm2 start "npx tsx src/index.ts" --name news-bot --cwd /var/www/news-bot
-pm2 start "npx tsx src/server.ts" --name news-admin --cwd /var/www/news-bot
+pm2 start ecosystem.config.cjs
+# yoki alohida:
+# pm2 start ecosystem.config.cjs --only news-bot
+# pm2 start ecosystem.config.cjs --only news-admin
 
 pm2 save
 pm2 startup
