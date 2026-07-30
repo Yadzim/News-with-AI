@@ -90,32 +90,35 @@ mkdir -p data
 
 ---
 
-## 3. PM2 bilan ishga tushirish
+## 3. Systemd bilan ishga tushirish
+
+PM2 shart emas. Misol unit fayllar:
+
+- [`news-bot.service.example`](./news-bot.service.example) → `npm run bot`
+- [`news-admin.service.example`](./news-admin.service.example) → `npm run admin`
 
 ```bash
-sudo npm i -g pm2
+sudo cp deploy/news-bot.service.example /etc/systemd/system/news-bot.service
+sudo cp deploy/news-admin.service.example /etc/systemd/system/news-admin.service
 
-pm2 start ecosystem.config.cjs
-# yoki alohida:
-# pm2 start ecosystem.config.cjs --only news-bot
-# pm2 start ecosystem.config.cjs --only news-admin
+# User/path ni o‘z serveringizga moslang (nano bilan)
+sudo nano /etc/systemd/system/news-bot.service
+sudo nano /etc/systemd/system/news-admin.service
 
-pm2 save
-pm2 startup
-# chiqqan buyruqni nusxa ko‘chirib ishga tushiring
-
-pm2 status
-pm2 logs news-bot
-pm2 logs news-admin
+sudo systemctl daemon-reload
+sudo systemctl enable --now news-bot news-admin
+sudo systemctl status news-bot news-admin
 ```
 
 Foydali buyruqlar:
 
 ```bash
-pm2 restart news-bot news-admin
-pm2 stop news-bot news-admin
-pm2 delete news-bot news-admin
+sudo systemctl restart news-bot news-admin
+sudo journalctl -u news-bot -f
+sudo journalctl -u news-admin -f
 ```
+
+> `news-admin` ichida schedule bor — alohida cron service ishlatmang.
 
 ---
 
@@ -203,7 +206,7 @@ https://api.telegram.org/bot<TOKEN>/getUpdates
 | RSS + AI yig‘ish | Sozlamalar → **Qayta olib kelish** |
 | Qo‘lda Telegramga post | Sozlamalar → **Telegramga yuborish** |
 | Avto-post vaqti | Sozlamalar → ertalab / kechqurun |
-| Holat ko‘rish | `pm2 status` / `pm2 logs` |
+| Holat ko‘rish | `systemctl status` / `journalctl -u news-admin -f` |
 
 Birinchi test tartibi:
 
@@ -221,25 +224,29 @@ Birinchi test tartibi:
 cd /var/www/news-bot
 git pull
 npm ci
-pm2 restart news-bot news-admin
+sudo systemctl restart news-bot news-admin
 ```
 
 `.env` o‘zgarmagan bo‘lsa, qayta yozish shart emas.
 
 ### GitHub Actions (avto-deploy)
 
-`.github/workflows/deploy.yml` — `main` ga push bo‘lganda SSH orqali yangilanadi.
+`.github/workflows/deploy.yml` — `main` ga push bo‘lganda SSH orqali:
+
+`git pull` → `npm ci` → `systemctl restart`
 
 Repo → **Settings → Secrets and variables → Actions**:
 
 | Secret | Tavsif |
 |--------|--------|
 | `SSH_HOST` | Server IP yoki domen |
-| `SSH_USER` | SSH foydalanuvchi (masalan `ubuntu`) |
-| `SSH_KEY` | Private SSH key (to‘liq PEM) |
+| `SSH_USER` | SSH foydalanuvchi |
+| `SSH_KEY` | Private SSH key |
 | `SSH_PORT` | Ixtiyoriy, default `22` |
+| `SERVICE_BOT` | Ixtiyoriy, default `news-bot` |
+| `SERVICE_ADMIN` | Ixtiyoriy, default `news-admin` |
 
-Workflow ichida `request_pty: true` yoqilgan (ba’zi serverlarda PM2/TTY uchun kerak).
+SSH user `sudo systemctl restart` qila olishi kerak (passwordless sudo tavsiya).
 
 ---
 

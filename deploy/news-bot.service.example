@@ -1,0 +1,16 @@
+[Unit]
+Description=AI News Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/news-bot
+EnvironmentFile=/var/www/news-bot/.env
+ExecStart=/usr/bin/npm run bot
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -30,13 +30,13 @@ npm run fetch    # Bir martalik RSS + AI (test)
 To‘liq yo‘riqnoma: [`deploy/SERVER.md`](deploy/SERVER.md)
 
 - Node 20 + nginx + HTTPS
-- PM2: `news-bot` + `news-admin`
+- systemd: `news-bot` + `news-admin` (`npm run bot` / `npm run admin`)
 - Mini App / BotFather Menu Button
 - Yangilash va troubleshooting
 
 GitHub Actions deploy (`.github/workflows/deploy.yml`): repo Secrets ga
-`SSH_HOST`, `SSH_USER`, `SSH_KEY` (ixtiyoriy `SSH_PORT`) qo‘ying.
-`main` ga push bo‘lganda serverda `git pull` + `pm2 restart` ishlaydi.
+`SSH_HOST`, `SSH_USER`, `SSH_KEY` qo‘ying.
+`main` ga push → `git pull` + `systemctl restart`.
 
 ## Admin panel
 
