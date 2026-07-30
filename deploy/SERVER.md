@@ -272,7 +272,7 @@ sudo ufw status
 | Gemini `404` model | `.env` da `GEMINI_MODEL=gemini-2.0-flash` yoki `gemini-3.1-flash-lite` |
 | `better-sqlite3` build xato | `build-essential` o‘rnating, keyin `npm ci` |
 | Post kelmaydi | Topic ID noto‘g‘ri; `pm2 logs news-admin` ni ko‘ring |
-| Ikki marta post | GitHub Actions cron **va** server `news-admin` birgalikda ishlayotgan — bittasini o‘chiring |
+| Ikki marta post | Ikki marta `news-admin` / schedule ishlayotganini tekshiring |
 
 ---
 

@@ -62,19 +62,12 @@ npm run pipeline
 npx tsx src/cron.ts --now
 ```
 
-## GitHub Actions (CI/CD)
+## GitHub Actions
 
 1. **CI** (`.github/workflows/ci.yml`) — `push`/`PR` da TypeScript tekshiruvi.
-2. **Pipeline** (`.github/workflows/news-pipeline.yml`) — har kuni **08:00** va **20:00** (Toshkent) RSS → AI → Telegram.
+2. **Deploy** (`.github/workflows/deploy.yml`) — `main` ga push → serverda `git pull` + `systemctl restart`.
 
-Repo → **Settings → Secrets and variables → Actions** ga qo‘ying:
-
-- `GEMINI_API_KEY`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_GROUP_ID`
-- `TOPIC_AI`, `TOPIC_HARDWARE`, `TOPIC_CYBERSECURITY`, `TOPIC_STARTUPS`, `TOPIC_GENERAL_TECH`
-
-SQLite `data/news.db` runlar oralig‘ida cache orqali saqlanadi (dedupe uchun). Qo‘lda ishga tushirish: Actions → **News Pipeline** → **Run workflow**.
+Avto-post serverdagi `news-admin` (systemd) orqali ishlaydi.
 
 ## .env
 
