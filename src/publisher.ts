@@ -1,11 +1,13 @@
 import { Bot } from "grammy";
 import { config, type Category } from "./config.js";
 import {
+  claimNewsForPosting,
   getPendingNews,
   getThreadId,
-  markNewsPosted,
+  unclaimNews,
   type NewsRow,
 } from "./db.js";
+import { escapeHtml, siteNameFromUrl } from "./url.js";
 
 const POST_DELAY_MS = 800;
 
@@ -34,36 +36,42 @@ export function formatPublishedAt(news: NewsRow): string | null {
   return formatted;
 }
 
+/** Telegram HTML: to‘liq URL ko‘rinmaydi, sayt nomi + havola bosiladi */
 export function formatNewsMessage(news: NewsRow): string {
   const bullets = (news.summary_uz || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => (line.startsWith("🔹") ? line : `🔹 ${line}`));
+    .map((line) => {
+      const text = line.startsWith("🔹") ? line : `🔹 ${line}`;
+      return escapeHtml(text);
+    });
 
   const category = (news.category || "General Tech") as Category;
   const hashtag = `#${category.replace(/\s+/g, "")}`;
   const when = formatPublishedAt(news);
+  const site = escapeHtml(siteNameFromUrl(news.source_url));
+  const href = escapeHtml(news.source_url);
 
   const lines = [
-    `📌 ${news.title_uz}`,
+    `📌 ${escapeHtml(news.title_uz || news.title_original || "")}`,
     "",
     ...bullets,
     "",
-    `🏷 Kategoriya: ${hashtag}`,
+    `🏷 Kategoriya: ${escapeHtml(hashtag)}`,
   ];
 
   if (when) {
-    lines.push(`🕐 ${when}`);
+    lines.push(`🕐 ${escapeHtml(when)}`);
   }
 
-  lines.push(`🔗 ${news.source_url}`);
+  lines.push(`🔗 ${site} · <a href="${href}">havola</a>`);
   return lines.join("\n");
 }
 
 /**
  * Navbatdagi (is_posted=0) yangiliklarni Telegram topic’larga yuboradi.
- * default limit yuqori — bir cron ishida bir nechta post ketadi.
+ * Claim orqali parallel yuborishda dublikat oldini oladi.
  */
 export async function publishPendingNews(
   bot: Bot,
@@ -75,16 +83,21 @@ export async function publishPendingNews(
   for (const news of pending) {
     if (!news.category) continue;
 
+    if (!claimNewsForPosting(news.id)) {
+      console.log(`Skip (allaqachon claim): ${news.id}`);
+      continue;
+    }
+
     try {
       const threadId = getThreadId(news.category as Category);
       const text = formatNewsMessage(news);
 
       await bot.api.sendMessage(config.telegramGroupId, text, {
         message_thread_id: threadId,
+        parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
       });
 
-      markNewsPosted(news.id);
       published += 1;
       console.log(`Post qilindi [${news.category}]: ${news.title_uz}`);
 
@@ -92,6 +105,7 @@ export async function publishPendingNews(
         await sleep(POST_DELAY_MS);
       }
     } catch (err) {
+      unclaimNews(news.id);
       console.error(`Post xatosi (${news.id}):`, err);
     }
   }

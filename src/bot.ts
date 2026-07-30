@@ -51,6 +51,7 @@ async function sendNewsByCategory(
   const news = rows[0]!;
   await ctx.reply(formatNewsMessage(news), {
     reply_markup: moreNewsKeyboard(category, offset + 1),
+    parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
 }

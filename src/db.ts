@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { CATEGORIES, config, type Category } from "./config.js";
+import { normalizeSourceUrl } from "./url.js";
 
 export type NewsRow = {
   id: string;
@@ -79,9 +80,10 @@ for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
 }
 
 export function newsExists(sourceUrl: string): boolean {
+  const normalized = normalizeSourceUrl(sourceUrl);
   const row = db
     .prepare("SELECT 1 AS ok FROM news WHERE source_url = ?")
-    .get(sourceUrl) as { ok: number } | undefined;
+    .get(normalized) as { ok: number } | undefined;
   return Boolean(row);
 }
 
@@ -96,13 +98,14 @@ export type InsertNewsInput = {
 
 export function insertNews(input: InsertNewsInput): NewsRow {
   const id = randomUUID();
+  const source_url = normalizeSourceUrl(input.source_url);
   db.prepare(
     `INSERT INTO news (
       id, source_url, title_original, title_uz, summary_uz, category, published_at, is_posted
     ) VALUES (
       @id, @source_url, @title_original, @title_uz, @summary_uz, @category, @published_at, 0
     )`,
-  ).run({ id, ...input });
+  ).run({ id, ...input, source_url });
 
   return getNewsById(id)!;
 }
@@ -129,6 +132,44 @@ export function getPendingNews(limit = 20): NewsRow[] {
 
 export function markNewsPosted(id: string): void {
   db.prepare("UPDATE news SET is_posted = 1 WHERE id = ?").run(id);
+}
+
+/** Concurrent publish’da ikki marta yuborilmasligi uchun atomic claim */
+export function claimNewsForPosting(id: string): boolean {
+  const result = db
+    .prepare("UPDATE news SET is_posted = 1 WHERE id = ? AND is_posted = 0")
+    .run(id);
+  return result.changes === 1;
+}
+
+export function unclaimNews(id: string): void {
+  db.prepare("UPDATE news SET is_posted = 0 WHERE id = ? AND is_posted = 1").run(
+    id,
+  );
+}
+
+/** Bir xil sarlavha (taxminan) allaqachon bor-yo‘qligi */
+export function similarTitleExists(title: string): boolean {
+  const normalized = title.trim().toLowerCase().replace(/\s+/g, " ");
+  if (normalized.length < 12) return false;
+
+  const rows = db
+    .prepare(
+      `SELECT title_original, title_uz FROM news
+       WHERE created_at >= datetime('now', '-14 days')
+       ORDER BY created_at DESC
+       LIMIT 200`,
+    )
+    .all() as { title_original: string | null; title_uz: string | null }[];
+
+  for (const row of rows) {
+    for (const t of [row.title_original, row.title_uz]) {
+      if (!t) continue;
+      const other = t.trim().toLowerCase().replace(/\s+/g, " ");
+      if (other === normalized) return true;
+    }
+  }
+  return false;
 }
 
 export function getNewsByCategory(

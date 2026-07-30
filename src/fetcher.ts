@@ -1,6 +1,7 @@
 import Parser from "rss-parser";
 import { processNews } from "./ai.js";
-import { insertNews, newsExists } from "./db.js";
+import { insertNews, newsExists, similarTitleExists } from "./db.js";
+import { normalizeSourceUrl } from "./url.js";
 
 const parser = new Parser({
   timeout: 15_000,
@@ -83,9 +84,9 @@ function resolveSourceUrl(item: FeedItem): string | null {
   const url = (item.link || item.guid || "").trim();
   if (!url) return null;
   try {
-    return new URL(url).href;
+    return normalizeSourceUrl(new URL(url).href);
   } catch {
-    return url;
+    return normalizeSourceUrl(url);
   }
 }
 
@@ -119,6 +120,10 @@ async function processFeed(
 
       if (!sourceUrl || !title) continue;
       if (newsExists(sourceUrl)) continue;
+      if (similarTitleExists(title)) {
+        console.log(`[${feedName}] skip (o‘xshash sarlavha): ${title}`);
+        continue;
+      }
 
       const content = itemContent(item);
       if (!content) continue;
