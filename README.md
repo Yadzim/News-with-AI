@@ -34,6 +34,10 @@ To‘liq yo‘riqnoma: [`deploy/SERVER.md`](deploy/SERVER.md)
 - Mini App / BotFather Menu Button
 - Yangilash va troubleshooting
 
+GitHub Actions deploy (`.github/workflows/deploy.yml`): repo Secrets ga
+`SSH_HOST`, `SSH_USER`, `SSH_KEY` (ixtiyoriy `SSH_PORT`) qo‘ying.
+`main` ga push bo‘lganda serverda `git pull` + `pm2 restart` ishlaydi.
+
 ## Admin panel
 
 ```bash

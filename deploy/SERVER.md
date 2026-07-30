@@ -213,6 +213,8 @@ Birinchi test tartibi:
 
 ## 7. Kodni yangilash
 
+### Qo‘lda
+
 ```bash
 cd /var/www/news-bot
 git pull
@@ -221,6 +223,21 @@ pm2 restart news-bot news-admin
 ```
 
 `.env` o‘zgarmagan bo‘lsa, qayta yozish shart emas.
+
+### GitHub Actions (avto-deploy)
+
+`.github/workflows/deploy.yml` — `main` ga push bo‘lganda SSH orqali yangilanadi.
+
+Repo → **Settings → Secrets and variables → Actions**:
+
+| Secret | Tavsif |
+|--------|--------|
+| `SSH_HOST` | Server IP yoki domen |
+| `SSH_USER` | SSH foydalanuvchi (masalan `ubuntu`) |
+| `SSH_KEY` | Private SSH key (to‘liq PEM) |
+| `SSH_PORT` | Ixtiyoriy, default `22` |
+
+Workflow ichida `request_pty: true` yoqilgan (ba’zi serverlarda PM2/TTY uchun kerak).
 
 ---
 
