@@ -222,12 +222,11 @@ Birinchi test tartibi:
 
 ```bash
 cd /var/www/news-bot
-git pull
-npm ci
-sudo systemctl restart news-bot news-admin
+./deploy.sh
 ```
 
-`.env` o‘zgarmagan bo‘lsa, qayta yozish shart emas.
+Skript: `git pull` → (kerak bo‘lsa) `npm ci` → `systemctl restart`.
+`package-lock.json` o‘zgarmasa `npm ci` o‘tkazib yuboriladi (tez).
 
 ### GitHub Actions (avto-deploy)
 

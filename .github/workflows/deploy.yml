@@ -26,13 +26,11 @@ jobs:
           if [ "$missing" -eq 1 ]; then
             echo "Repo → Settings → Secrets and variables → Actions ga qo‘ying:"
             echo "  SSH_HOST / SSH_USER / SSH_KEY"
-            echo "  SERVICE_BOT   (ixtiyoriy, default: news-bot)"
-            echo "  SERVICE_ADMIN (ixtiyoriy, default: news-admin)"
             exit 1
           fi
           echo "Secrets OK"
 
-      - name: Deploy to server
+      - name: Deploy via ./deploy.sh
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -41,19 +39,13 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           request_pty: true
           script_stop: true
+          command_timeout: 10m
           envs: SERVICE_BOT,SERVICE_ADMIN
           script: |
             set -e
             cd /var/www/news-bot
-            git pull origin main
-            npm ci
-
-            BOT_SVC="${SERVICE_BOT:-news-bot}"
-            ADMIN_SVC="${SERVICE_ADMIN:-news-admin}"
-
-            echo "Restarting systemd: $BOT_SVC , $ADMIN_SVC"
-            sudo systemctl restart "$BOT_SVC" "$ADMIN_SVC"
-            sudo systemctl --no-pager --full status "$BOT_SVC" "$ADMIN_SVC" || true
+            chmod +x ./deploy.sh
+            ./deploy.sh
         env:
           SERVICE_BOT: ${{ secrets.SERVICE_BOT }}
           SERVICE_ADMIN: ${{ secrets.SERVICE_ADMIN }}
