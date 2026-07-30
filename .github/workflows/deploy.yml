@@ -13,13 +13,33 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Check deploy secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          missing=0
+          if [ -z "$SSH_HOST" ]; then echo "::error::SSH_HOST secret yo‘q yoki bo‘sh"; missing=1; fi
+          if [ -z "$SSH_USER" ]; then echo "::error::SSH_USER secret yo‘q yoki bo‘sh"; missing=1; fi
+          if [ -z "$SSH_KEY" ]; then echo "::error::SSH_KEY secret yo‘q yoki bo‘sh"; missing=1; fi
+          if [ "$missing" -eq 1 ]; then
+            echo "Repo → Settings → Secrets and variables → Actions ga qo‘ying:"
+            echo "  SSH_HOST  = server IP yoki domen"
+            echo "  SSH_USER  = ssh username"
+            echo "  SSH_KEY   = private key (-----BEGIN ... PRIVATE KEY-----)"
+            echo "  SSH_PORT  = ixtiyoriy (default 22)"
+            exit 1
+          fi
+          echo "Secrets OK (host=${#SSH_HOST} chars, user=${#SSH_USER} chars)"
+
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          port: ${{ secrets.SSH_PORT || 22 }}
           request_pty: true
           script_stop: true
           script: |
