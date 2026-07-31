@@ -49,8 +49,8 @@
 
         <div class="status-row" role="tablist" aria-label="Holat">
           <button type="button" class="status-chip is-active" data-posted="all">Hammasi</button>
-          <button type="button" class="status-chip" data-posted="no">Yangi</button>
-          <button type="button" class="status-chip" data-posted="yes">Yuborilgan</button>
+          <button type="button" class="status-chip" data-posted="group_no">Guruh yangi</button>
+          <button type="button" class="status-chip" data-posted="channel_no">Kanal yangi</button>
         </div>
 
         <label class="search">
@@ -95,12 +95,12 @@
             <strong id="statTotal">—</strong>
           </div>
           <div class="mini-stat">
-            <span>Kutilmoqda</span>
-            <strong id="statPending">—</strong>
+            <span>Guruh kutilmoqda</span>
+            <strong id="statPendingGroup">—</strong>
           </div>
           <div class="mini-stat">
-            <span>Yuborilgan</span>
-            <strong id="statPosted">—</strong>
+            <span>Kanal kutilmoqda</span>
+            <strong id="statPendingChannel">—</strong>
           </div>
         </section>
 
@@ -108,30 +108,52 @@
           <h3>Amallar</h3>
           <div class="btn-row">
             <button type="button" id="btnFetch" class="btn btn-primary">Qayta olib kelish</button>
-            <button type="button" id="btnPublish" class="btn btn-accent">Telegramga yuborish</button>
+            <button type="button" id="btnPublishGroup" class="btn btn-accent">Guruhga yuborish</button>
+            <button type="button" id="btnPublishChannel" class="btn btn-accent">Kanalga yuborish</button>
           </div>
           <p id="actionStatus" class="status" aria-live="polite"></p>
         </section>
 
         <section class="sheet-block">
-          <h3>Yuborish vaqti</h3>
-          <p class="hint">Asia/Tashkent · har kuni ikki marta</p>
-          <form id="scheduleForm" class="schedule-form">
+          <h3>Guruh — yuborish vaqti</h3>
+          <p class="hint">Forum guruh Topics · Asia/Tashkent</p>
+          <form id="scheduleGroupForm" class="schedule-form">
             <label>
               Ertalab
-              <input type="time" id="morning" required />
+              <input type="time" id="groupMorning" required />
             </label>
             <label>
               Kechqurun
-              <input type="time" id="evening" required />
+              <input type="time" id="groupEvening" required />
             </label>
             <label class="check">
-              <input type="checkbox" id="enabled" />
+              <input type="checkbox" id="groupEnabled" />
               Avto-yuborish yoqilgan
             </label>
             <button type="submit" class="btn btn-primary">Saqlash</button>
           </form>
-          <p id="scheduleStatus" class="status" aria-live="polite"></p>
+          <p id="scheduleGroupStatus" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="sheet-block">
+          <h3>Kanal — yuborish vaqti</h3>
+          <p class="hint">Telegram kanal · alohida jadval</p>
+          <form id="scheduleChannelForm" class="schedule-form">
+            <label>
+              Ertalab
+              <input type="time" id="channelMorning" required />
+            </label>
+            <label>
+              Kechqurun
+              <input type="time" id="channelEvening" required />
+            </label>
+            <label class="check">
+              <input type="checkbox" id="channelEnabled" />
+              Avto-yuborish yoqilgan
+            </label>
+            <button type="submit" class="btn btn-primary">Saqlash</button>
+          </form>
+          <p id="scheduleChannelStatus" class="status" aria-live="polite"></p>
         </section>
 
         <section class="sheet-block">

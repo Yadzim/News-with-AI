@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
-import { getScheduleSettings } from "./db.js";
-import { runPipeline } from "./pipeline.js";
+import { getTargetScheduleSettings, type ScheduleSettings } from "./db.js";
+import { runGroupPipeline, runPublishChannel } from "./pipeline.js";
 
 const TZ = "Asia/Tashkent";
 
@@ -16,22 +16,9 @@ function parseHourMinute(value: string): { hour: number; minute: number } | null
   return { hour, minute };
 }
 
-export function buildCronExpression(morning: string, evening: string): string | null {
-  const a = parseHourMinute(morning);
-  const b = parseHourMinute(evening);
-  if (!a || !b) return null;
-
-  const hours = [...new Set([a.hour, b.hour])].sort((x, y) => x - y);
-  // Agar daqiqalar farq qilsa — ikkita alohida ifoda kerak
-  if (a.minute === b.minute) {
-    return `${a.minute} ${hours.join(",")} * * *`;
-  }
-  return null;
-}
-
 export function scheduleFingerprint(): string {
-  const s = getScheduleSettings();
-  return `${s.enabled}|${s.morning}|${s.evening}`;
+  const s = getTargetScheduleSettings();
+  return JSON.stringify(s);
 }
 
 function stopTasks(): void {
@@ -41,53 +28,77 @@ function stopTasks(): void {
   tasks = [];
 }
 
-export function applyScheduleFromDb(): { ok: boolean; message: string } {
-  const settings = getScheduleSettings();
-  stopTasks();
-  lastFingerprint = scheduleFingerprint();
+function registerSchedule(
+  label: string,
+  settings: ScheduleSettings,
+  run: () => void,
+): string[] {
+  const messages: string[] = [];
 
   if (!settings.enabled) {
-    return { ok: true, message: "Avto-yuborish o‘chirilgan" };
+    messages.push(`${label}: o‘chirilgan`);
+    return messages;
   }
 
   const a = parseHourMinute(settings.morning);
   const b = parseHourMinute(settings.evening);
   if (!a || !b) {
-    return { ok: false, message: "Noto‘g‘ri vaqt formati (HH:MM)" };
+    messages.push(`${label}: noto‘g‘ri vaqt`);
+    return messages;
   }
-
-  const run = () => {
-    void runPipeline().catch((err) => {
-      console.error("Schedule pipeline xatosi:", err);
-    });
-  };
 
   if (a.minute === b.minute) {
     const expr = `${a.minute} ${[...new Set([a.hour, b.hour])].sort((x, y) => x - y).join(",")} * * *`;
     if (!cron.validate(expr)) {
-      return { ok: false, message: `Noto‘g‘ri cron: ${expr}` };
+      messages.push(`${label}: noto‘g‘ri cron ${expr}`);
+      return messages;
     }
     tasks.push(cron.schedule(expr, run, { timezone: TZ }));
-    return {
-      ok: true,
-      message: `Reja: har kuni ${settings.morning} va ${settings.evening} (${TZ})`,
-    };
+    messages.push(`${label}: ${settings.morning}, ${settings.evening}`);
+    return messages;
   }
 
   const exprA = `${a.minute} ${a.hour} * * *`;
   const exprB = `${b.minute} ${b.hour} * * *`;
   if (!cron.validate(exprA) || !cron.validate(exprB)) {
-    return { ok: false, message: "Noto‘g‘ri cron ifodalar" };
+    messages.push(`${label}: noto‘g‘ri cron`);
+    return messages;
   }
   tasks.push(cron.schedule(exprA, run, { timezone: TZ }));
   tasks.push(cron.schedule(exprB, run, { timezone: TZ }));
+  messages.push(`${label}: ${settings.morning}, ${settings.evening}`);
+  return messages;
+}
+
+export function applyScheduleFromDb(): { ok: boolean; message: string } {
+  const settings = getTargetScheduleSettings();
+  stopTasks();
+  lastFingerprint = scheduleFingerprint();
+
+  const parts: string[] = [];
+
+  parts.push(
+    ...registerSchedule("Guruh", settings.group, () => {
+      void runGroupPipeline().catch((err) => {
+        console.error("Guruh schedule xatosi:", err);
+      });
+    }),
+  );
+
+  parts.push(
+    ...registerSchedule("Kanal", settings.channel, () => {
+      void runPublishChannel().catch((err) => {
+        console.error("Kanal schedule xatosi:", err);
+      });
+    }),
+  );
+
   return {
     ok: true,
-    message: `Reja: har kuni ${settings.morning} va ${settings.evening} (${TZ})`,
+    message: `${parts.join(" · ")} (${TZ})`,
   };
 }
 
-/** DB o‘zgarsa cron’ni qayta yuklaydi */
 export function startScheduleWatcher(intervalMs = 30_000): void {
   const applied = applyScheduleFromDb();
   console.log(applied.message);

@@ -557,7 +557,7 @@ body.sheet-open {
 
 @media (min-width: 760px) {
   .btn-row {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
   }
 
   .news-card h2 {

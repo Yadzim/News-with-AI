@@ -7,12 +7,15 @@ import { CATEGORIES, config, type Category } from "./config.js";
 import {
   deleteNews,
   getNewsStats,
-  getScheduleSettings,
+  getTargetScheduleSettings,
   listNews,
-  saveScheduleSettings,
+  saveTargetSchedule,
 } from "./db.js";
 import { fetchAndProcessNews } from "./fetcher.js";
-import { publishPendingNews } from "./publisher.js";
+import {
+  publishPendingToChannel,
+  publishPendingToGroup,
+} from "./publisher.js";
 import { applyScheduleFromDb, parseHourMinute, startScheduleWatcher } from "./schedule.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -46,7 +49,8 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/meta", auth, (_req, res) => {
   res.json({
     categories: CATEGORIES,
-    schedule: getScheduleSettings(),
+    schedule: getTargetScheduleSettings(),
+    channelConfigured: Boolean(config.telegramChannelId),
     stats: getNewsStats(),
   });
 });
@@ -65,8 +69,18 @@ app.get("/api/news", auth, (req, res) => {
         : "all";
 
   const postedRaw = String(req.query.posted || "all");
-  const posted =
-    postedRaw === "yes" || postedRaw === "no" ? postedRaw : "all";
+  const postedAllowed = [
+    "all",
+    "yes",
+    "no",
+    "group_yes",
+    "group_no",
+    "channel_yes",
+    "channel_no",
+  ] as const;
+  const posted = postedAllowed.includes(postedRaw as (typeof postedAllowed)[number])
+    ? (postedRaw as (typeof postedAllowed)[number])
+    : "all";
 
   const result = listNews({
     category,
@@ -101,10 +115,41 @@ app.post("/api/fetch", auth, async (_req, res) => {
   }
 });
 
+app.post("/api/publish/group", auth, async (_req, res) => {
+  try {
+    const bot = new Bot(config.telegramBotToken);
+    const published = await publishPendingToGroup(bot, 50);
+    res.json({ ok: true, published, stats: getNewsStats() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Publish xatosi",
+    });
+  }
+});
+
+app.post("/api/publish/channel", auth, async (_req, res) => {
+  try {
+    if (!config.telegramChannelId) {
+      res.status(400).json({ error: "TELEGRAM_CHANNEL_ID sozlanmagan" });
+      return;
+    }
+    const bot = new Bot(config.telegramBotToken);
+    const published = await publishPendingToChannel(bot, 50);
+    res.json({ ok: true, published, stats: getNewsStats() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Publish xatosi",
+    });
+  }
+});
+
+/** @deprecated /api/publish/group */
 app.post("/api/publish", auth, async (_req, res) => {
   try {
     const bot = new Bot(config.telegramBotToken);
-    const published = await publishPendingNews(bot, 50);
+    const published = await publishPendingToGroup(bot, 50);
     res.json({ ok: true, published, stats: getNewsStats() });
   } catch (err) {
     console.error(err);
@@ -115,9 +160,40 @@ app.post("/api/publish", auth, async (_req, res) => {
 });
 
 app.get("/api/schedule", auth, (_req, res) => {
-  res.json(getScheduleSettings());
+  res.json(getTargetScheduleSettings());
 });
 
+app.put("/api/schedule/group", auth, (req, res) => {
+  const morning = String(req.body?.morning || "").trim();
+  const evening = String(req.body?.evening || "").trim();
+  const enabled = Boolean(req.body?.enabled);
+
+  if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
+    res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
+    return;
+  }
+
+  const saved = saveTargetSchedule("group", { morning, evening, enabled });
+  const applied = applyScheduleFromDb();
+  res.json({ ...saved, applied: applied.message });
+});
+
+app.put("/api/schedule/channel", auth, (req, res) => {
+  const morning = String(req.body?.morning || "").trim();
+  const evening = String(req.body?.evening || "").trim();
+  const enabled = Boolean(req.body?.enabled);
+
+  if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
+    res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
+    return;
+  }
+
+  const saved = saveTargetSchedule("channel", { morning, evening, enabled });
+  const applied = applyScheduleFromDb();
+  res.json({ ...saved, applied: applied.message });
+});
+
+/** @deprecated /api/schedule/group */
 app.put("/api/schedule", auth, (req, res) => {
   const morning = String(req.body?.morning || "").trim();
   const evening = String(req.body?.evening || "").trim();
@@ -128,7 +204,7 @@ app.put("/api/schedule", auth, (req, res) => {
     return;
   }
 
-  const saved = saveScheduleSettings({ morning, evening, enabled });
+  const saved = saveTargetSchedule("group", { morning, evening, enabled });
   const applied = applyScheduleFromDb();
   res.json({ ...saved, applied: applied.message });
 });

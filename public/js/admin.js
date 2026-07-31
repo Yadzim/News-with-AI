@@ -116,8 +116,8 @@ function syncHiddenFilters() {
 
 function renderStats(stats) {
   $("statTotal").textContent = String(stats.total ?? "—");
-  $("statPending").textContent = String(stats.pending ?? "—");
-  $("statPosted").textContent = String(stats.posted ?? "—");
+  $("statPendingGroup").textContent = String(stats.pendingGroup ?? stats.pending ?? "—");
+  $("statPendingChannel").textContent = String(stats.pendingChannel ?? "—");
 }
 
 function renderCategoryChips() {
@@ -174,9 +174,12 @@ function renderNews(items) {
 
   root.innerHTML = items
     .map((item, i) => {
-      const badge = item.is_posted
-        ? `<span class="badge posted">Yuborilgan</span>`
-        : `<span class="badge pending">Yangi</span>`;
+      const groupBadge = item.is_posted
+        ? `<span class="badge posted">Guruh ✓</span>`
+        : `<span class="badge pending">Guruh</span>`;
+      const channelBadge = item.is_posted_channel
+        ? `<span class="badge posted">Kanal ✓</span>`
+        : `<span class="badge pending">Kanal</span>`;
       const summary = bulletsText(item.summary_uz);
       const site = siteNameFromUrl(item.source_url);
       return `
@@ -185,7 +188,8 @@ function renderNews(items) {
             <h2>${escapeHtml(item.title_uz || item.title_original || "Nomsiz")}</h2>
           </div>
           <div class="meta">
-            ${badge}
+            ${groupBadge}
+            ${channelBadge}
             <span class="badge cat">${escapeHtml(item.category || "—")}</span>
             <span class="badge">${escapeHtml(formatWhen(item.published_at || item.created_at))}</span>
           </div>
@@ -216,10 +220,24 @@ async function loadMeta() {
   state.categories = meta.categories || [];
   renderCategoryChips();
   renderStats(meta.stats || {});
-  const s = meta.schedule || {};
-  $("morning").value = s.morning || "08:00";
-  $("evening").value = s.evening || "20:00";
-  $("enabled").checked = Boolean(s.enabled);
+
+  const sg = meta.schedule?.group || {};
+  $("groupMorning").value = sg.morning || "08:00";
+  $("groupEvening").value = sg.evening || "20:00";
+  $("groupEnabled").checked = Boolean(sg.enabled);
+
+  const sc = meta.schedule?.channel || {};
+  $("channelMorning").value = sc.morning || "09:00";
+  $("channelEvening").value = sc.evening || "21:00";
+  $("channelEnabled").checked = Boolean(sc.enabled);
+
+  const btnChannel = $("btnPublishChannel");
+  if (btnChannel) {
+    btnChannel.disabled = !meta.channelConfigured;
+    btnChannel.title = meta.channelConfigured
+      ? ""
+      : "TELEGRAM_CHANNEL_ID sozlanmagan";
+  }
 
   const select = $("filterCategory");
   select.innerHTML = `<option value="all">all</option>`;
@@ -303,9 +321,15 @@ $("btnRefresh").addEventListener(
   }),
 );
 
+const publishBtns = () => [
+  $("btnFetch"),
+  $("btnPublishGroup"),
+  $("btnPublishChannel"),
+];
+
 $("btnFetch").addEventListener(
   "click",
-  withBusy([$("btnFetch"), $("btnPublish")], async () => {
+  withBusy(publishBtns(), async () => {
     setStatus($("actionStatus"), "RSS yig‘ilmoqda...", "");
     try {
       const data = await api("/api/fetch", { method: "POST" });
@@ -321,14 +345,14 @@ $("btnFetch").addEventListener(
   }),
 );
 
-$("btnPublish").addEventListener(
+$("btnPublishGroup").addEventListener(
   "click",
-  withBusy([$("btnFetch"), $("btnPublish")], async () => {
-    setStatus($("actionStatus"), "Telegramga yuborilmoqda...", "");
+  withBusy(publishBtns(), async () => {
+    setStatus($("actionStatus"), "Guruhga yuborilmoqda...", "");
     try {
-      const data = await api("/api/publish", { method: "POST" });
+      const data = await api("/api/publish/group", { method: "POST" });
       renderStats(data.stats || {});
-      setStatus($("actionStatus"), `Yuborildi: ${data.published} ta`, "ok");
+      setStatus($("actionStatus"), `Guruh: ${data.published} ta`, "ok");
       await loadNews();
       haptic("medium");
     } catch (err) {
@@ -337,22 +361,57 @@ $("btnPublish").addEventListener(
   }),
 );
 
-$("scheduleForm").addEventListener("submit", async (e) => {
+$("btnPublishChannel").addEventListener(
+  "click",
+  withBusy(publishBtns(), async () => {
+    setStatus($("actionStatus"), "Kanalga yuborilmoqda...", "");
+    try {
+      const data = await api("/api/publish/channel", { method: "POST" });
+      renderStats(data.stats || {});
+      setStatus($("actionStatus"), `Kanal: ${data.published} ta`, "ok");
+      await loadNews();
+      haptic("medium");
+    } catch (err) {
+      setStatus($("actionStatus"), err.message, "err");
+    }
+  }),
+);
+
+$("scheduleGroupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   saveToken();
   try {
-    const data = await api("/api/schedule", {
+    const data = await api("/api/schedule/group", {
       method: "PUT",
       body: JSON.stringify({
-        morning: $("morning").value,
-        evening: $("evening").value,
-        enabled: $("enabled").checked,
+        morning: $("groupMorning").value,
+        evening: $("groupEvening").value,
+        enabled: $("groupEnabled").checked,
       }),
     });
-    setStatus($("scheduleStatus"), data.applied || "Saqlandi", "ok");
+    setStatus($("scheduleGroupStatus"), data.applied || "Saqlandi", "ok");
     haptic("light");
   } catch (err) {
-    setStatus($("scheduleStatus"), err.message, "err");
+    setStatus($("scheduleGroupStatus"), err.message, "err");
+  }
+});
+
+$("scheduleChannelForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  saveToken();
+  try {
+    const data = await api("/api/schedule/channel", {
+      method: "PUT",
+      body: JSON.stringify({
+        morning: $("channelMorning").value,
+        evening: $("channelEvening").value,
+        enabled: $("channelEnabled").checked,
+      }),
+    });
+    setStatus($("scheduleChannelStatus"), data.applied || "Saqlandi", "ok");
+    haptic("light");
+  } catch (err) {
+    setStatus($("scheduleChannelStatus"), err.message, "err");
   }
 });
 

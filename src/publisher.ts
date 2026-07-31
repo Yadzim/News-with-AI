@@ -1,10 +1,13 @@
 import { Bot } from "grammy";
 import { config, type Category } from "./config.js";
 import {
-  claimNewsForPosting,
-  getPendingNews,
+  claimNewsForChannelPosting,
+  claimNewsForGroupPosting,
+  getPendingNewsForChannel,
+  getPendingNewsForGroup,
   getThreadId,
-  unclaimNews,
+  unclaimChannelNews,
+  unclaimGroupNews,
   type NewsRow,
 } from "./db.js";
 import { escapeHtml, siteNameFromUrl } from "./url.js";
@@ -69,22 +72,18 @@ export function formatNewsMessage(news: NewsRow): string {
   return lines.join("\n");
 }
 
-/**
- * Navbatdagi (is_posted=0) yangiliklarni Telegram topic’larga yuboradi.
- * Claim orqali parallel yuborishda dublikat oldini oladi.
- */
-export async function publishPendingNews(
+export async function publishPendingToGroup(
   bot: Bot,
   limit = 50,
 ): Promise<number> {
-  const pending = getPendingNews(limit);
+  const pending = getPendingNewsForGroup(limit);
   let published = 0;
 
   for (const news of pending) {
     if (!news.category) continue;
 
-    if (!claimNewsForPosting(news.id)) {
-      console.log(`Skip (allaqachon claim): ${news.id}`);
+    if (!claimNewsForGroupPosting(news.id)) {
+      console.log(`Skip guruh (claim): ${news.id}`);
       continue;
     }
 
@@ -99,17 +98,68 @@ export async function publishPendingNews(
       });
 
       published += 1;
-      console.log(`Post qilindi [${news.category}]: ${news.title_uz}`);
+      console.log(`Guruh [${news.category}]: ${news.title_uz}`);
 
       if (published < pending.length) {
         await sleep(POST_DELAY_MS);
       }
     } catch (err) {
-      unclaimNews(news.id);
-      console.error(`Post xatosi (${news.id}):`, err);
+      unclaimGroupNews(news.id);
+      console.error(`Guruh post xatosi (${news.id}):`, err);
     }
   }
 
-  console.log(`Jami post qilingan: ${published}/${pending.length}`);
+  console.log(`Guruh: ${published}/${pending.length}`);
   return published;
+}
+
+export async function publishPendingToChannel(
+  bot: Bot,
+  limit = 50,
+): Promise<number> {
+  if (!config.telegramChannelId) {
+    throw new Error("TELEGRAM_CHANNEL_ID .env da belgilanmagan");
+  }
+
+  const pending = getPendingNewsForChannel(limit);
+  let published = 0;
+
+  for (const news of pending) {
+    if (!news.category) continue;
+
+    if (!claimNewsForChannelPosting(news.id)) {
+      console.log(`Skip kanal (claim): ${news.id}`);
+      continue;
+    }
+
+    try {
+      const text = formatNewsMessage(news);
+
+      await bot.api.sendMessage(config.telegramChannelId, text, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+
+      published += 1;
+      console.log(`Kanal [${news.category}]: ${news.title_uz}`);
+
+      if (published < pending.length) {
+        await sleep(POST_DELAY_MS);
+      }
+    } catch (err) {
+      unclaimChannelNews(news.id);
+      console.error(`Kanal post xatosi (${news.id}):`, err);
+    }
+  }
+
+  console.log(`Kanal: ${published}/${pending.length}`);
+  return published;
+}
+
+/** @deprecated publishPendingToGroup */
+export async function publishPendingNews(
+  bot: Bot,
+  limit = 50,
+): Promise<number> {
+  return publishPendingToGroup(bot, limit);
 }

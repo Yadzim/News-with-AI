@@ -5,6 +5,7 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY majburiy"),
   TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN majburiy"),
   TELEGRAM_GROUP_ID: z.string().min(1, "TELEGRAM_GROUP_ID majburiy"),
+  TELEGRAM_CHANNEL_ID: z.string().optional().default(""),
   TOPIC_AI: z.coerce.number().int(),
   TOPIC_HARDWARE: z.coerce.number().int(),
   TOPIC_CYBERSECURITY: z.coerce.number().int(),
@@ -41,6 +42,9 @@ export const config = {
   geminiModel: parsed.data.GEMINI_MODEL,
   telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN,
   telegramGroupId: normalizeTelegramChatId(parsed.data.TELEGRAM_GROUP_ID),
+  telegramChannelId: parsed.data.TELEGRAM_CHANNEL_ID.trim()
+    ? normalizeTelegramChatId(parsed.data.TELEGRAM_CHANNEL_ID.trim())
+    : "",
   databasePath: parsed.data.DATABASE_PATH,
   port: parsed.data.PORT,
   adminToken: parsed.data.ADMIN_TOKEN,

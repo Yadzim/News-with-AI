@@ -15,6 +15,7 @@ export type NewsRow = {
   category: Category | null;
   published_at: string | null;
   is_posted: number;
+  is_posted_channel: number;
   created_at: string;
 };
 
@@ -79,6 +80,14 @@ for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
   insertSettingIfMissing.run(key, value);
 }
 
+// Migratsiya: kanal ustuni
+const newsCols = db
+  .prepare("PRAGMA table_info(news)")
+  .all() as { name: string }[];
+if (!newsCols.some((c) => c.name === "is_posted_channel")) {
+  db.exec(`ALTER TABLE news ADD COLUMN is_posted_channel INTEGER DEFAULT 0`);
+}
+
 export function newsExists(sourceUrl: string): boolean {
   const normalized = normalizeSourceUrl(sourceUrl);
   const row = db
@@ -116,7 +125,7 @@ export function getNewsById(id: string): NewsRow | undefined {
     | undefined;
 }
 
-export function getPendingNews(limit = 20): NewsRow[] {
+export function getPendingNewsForGroup(limit = 20): NewsRow[] {
   return db
     .prepare(
       `SELECT * FROM news
@@ -130,22 +139,76 @@ export function getPendingNews(limit = 20): NewsRow[] {
     .all(limit) as NewsRow[];
 }
 
-export function markNewsPosted(id: string): void {
+export function getPendingNewsForChannel(limit = 20): NewsRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM news
+       WHERE is_posted_channel = 0
+         AND title_uz IS NOT NULL
+         AND summary_uz IS NOT NULL
+         AND category IS NOT NULL
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as NewsRow[];
+}
+
+/** @deprecated getPendingNewsForGroup ishlating */
+export function getPendingNews(limit = 20): NewsRow[] {
+  return getPendingNewsForGroup(limit);
+}
+
+export function markNewsPostedToGroup(id: string): void {
   db.prepare("UPDATE news SET is_posted = 1 WHERE id = ?").run(id);
 }
 
-/** Concurrent publish’da ikki marta yuborilmasligi uchun atomic claim */
-export function claimNewsForPosting(id: string): boolean {
+export function markNewsPostedToChannel(id: string): void {
+  db.prepare("UPDATE news SET is_posted_channel = 1 WHERE id = ?").run(id);
+}
+
+/** @deprecated */
+export function markNewsPosted(id: string): void {
+  markNewsPostedToGroup(id);
+}
+
+export function claimNewsForGroupPosting(id: string): boolean {
   const result = db
     .prepare("UPDATE news SET is_posted = 1 WHERE id = ? AND is_posted = 0")
     .run(id);
   return result.changes === 1;
 }
 
-export function unclaimNews(id: string): void {
+export function claimNewsForChannelPosting(id: string): boolean {
+  const result = db
+    .prepare(
+      "UPDATE news SET is_posted_channel = 1 WHERE id = ? AND is_posted_channel = 0",
+    )
+    .run(id);
+  return result.changes === 1;
+}
+
+/** @deprecated */
+export function claimNewsForPosting(id: string): boolean {
+  return claimNewsForGroupPosting(id);
+}
+
+export function unclaimGroupNews(id: string): void {
   db.prepare("UPDATE news SET is_posted = 0 WHERE id = ? AND is_posted = 1").run(
     id,
   );
+}
+
+export function unclaimChannelNews(id: string): void {
+  db
+    .prepare(
+      "UPDATE news SET is_posted_channel = 0 WHERE id = ? AND is_posted_channel = 1",
+    )
+    .run(id);
+}
+
+/** @deprecated */
+export function unclaimNews(id: string): void {
+  unclaimGroupNews(id);
 }
 
 /** Bir xil sarlavha (taxminan) allaqachon bor-yo‘qligi */
@@ -233,24 +296,85 @@ export type ScheduleSettings = {
   enabled: boolean;
 };
 
-export function getScheduleSettings(): ScheduleSettings {
+export type TargetScheduleSettings = {
+  group: ScheduleSettings;
+  channel: ScheduleSettings;
+};
+
+function readSchedule(prefix: "group" | "channel"): ScheduleSettings {
   return {
-    morning: getSetting("schedule_morning") || "08:00",
-    evening: getSetting("schedule_evening") || "20:00",
-    enabled: (getSetting("schedule_enabled") || "1") === "1",
+    morning: getSetting(`schedule_${prefix}_morning`) || "08:00",
+    evening: getSetting(`schedule_${prefix}_evening`) || "20:00",
+    enabled: (getSetting(`schedule_${prefix}_enabled`) || "1") === "1",
   };
 }
 
-export function saveScheduleSettings(input: ScheduleSettings): ScheduleSettings {
-  setSetting("schedule_morning", input.morning);
-  setSetting("schedule_evening", input.evening);
-  setSetting("schedule_enabled", input.enabled ? "1" : "0");
-  return getScheduleSettings();
+export function getTargetScheduleSettings(): TargetScheduleSettings {
+  return {
+    group: readSchedule("group"),
+    channel: readSchedule("channel"),
+  };
 }
+
+/** @deprecated getTargetScheduleSettings().group */
+export function getScheduleSettings(): ScheduleSettings {
+  return readSchedule("group");
+}
+
+export function saveTargetSchedule(
+  target: "group" | "channel",
+  input: ScheduleSettings,
+): ScheduleSettings {
+  setSetting(`schedule_${target}_morning`, input.morning);
+  setSetting(`schedule_${target}_evening`, input.evening);
+  setSetting(`schedule_${target}_enabled`, input.enabled ? "1" : "0");
+  return readSchedule(target);
+}
+
+/** @deprecated saveTargetSchedule('group', ...) */
+export function saveScheduleSettings(input: ScheduleSettings): ScheduleSettings {
+  return saveTargetSchedule("group", input);
+}
+
+function migrateScheduleSettings(): void {
+  const legacyMorning = getSetting("schedule_morning");
+  const legacyEvening = getSetting("schedule_evening");
+  const legacyEnabled = getSetting("schedule_enabled");
+  if (legacyMorning && !getSetting("schedule_group_morning")) {
+    setSetting("schedule_group_morning", legacyMorning);
+  }
+  if (legacyEvening && !getSetting("schedule_group_evening")) {
+    setSetting("schedule_group_evening", legacyEvening);
+  }
+  if (legacyEnabled && !getSetting("schedule_group_enabled")) {
+    setSetting("schedule_group_enabled", legacyEnabled);
+  }
+
+  const defaults: Record<string, string> = {
+    schedule_group_morning: "08:00",
+    schedule_group_evening: "20:00",
+    schedule_group_enabled: "1",
+    schedule_channel_morning: "09:00",
+    schedule_channel_evening: "21:00",
+    schedule_channel_enabled: "1",
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    insertSettingIfMissing.run(key, value);
+  }
+}
+
+migrateScheduleSettings();
 
 export type ListNewsFilters = {
   category?: Category | "all";
-  posted?: "all" | "yes" | "no";
+  posted?:
+    | "all"
+    | "yes"
+    | "no"
+    | "group_yes"
+    | "group_no"
+    | "channel_yes"
+    | "channel_no";
   q?: string;
   page?: number;
   limit?: number;
@@ -277,6 +401,14 @@ export function listNews(filters: ListNewsFilters = {}): {
   if (filters.posted === "yes") {
     where.push("is_posted = 1");
   } else if (filters.posted === "no") {
+    where.push("is_posted = 0");
+  } else if (filters.posted === "channel_yes") {
+    where.push("is_posted_channel = 1");
+  } else if (filters.posted === "channel_no") {
+    where.push("is_posted_channel = 0");
+  } else if (filters.posted === "group_yes") {
+    where.push("is_posted = 1");
+  } else if (filters.posted === "group_no") {
     where.push("is_posted = 0");
   }
 
@@ -309,18 +441,32 @@ export function getNewsStats(): {
   total: number;
   pending: number;
   posted: number;
+  pendingGroup: number;
+  postedGroup: number;
+  pendingChannel: number;
+  postedChannel: number;
   byCategory: { category: string; count: number }[];
 } {
   const total = (db.prepare("SELECT COUNT(*) AS c FROM news").get() as { c: number }).c;
-  const pending = (
+  const pendingGroup = (
     db.prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted = 0").get() as {
       c: number;
     }
   ).c;
-  const posted = (
+  const postedGroup = (
     db.prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted = 1").get() as {
       c: number;
     }
+  ).c;
+  const pendingChannel = (
+    db
+      .prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 0")
+      .get() as { c: number }
+  ).c;
+  const postedChannel = (
+    db
+      .prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 1")
+      .get() as { c: number }
   ).c;
   const byCategory = db
     .prepare(
@@ -329,7 +475,16 @@ export function getNewsStats(): {
     )
     .all() as { category: string; count: number }[];
 
-  return { total, pending, posted, byCategory };
+  return {
+    total,
+    pending: pendingGroup,
+    posted: postedGroup,
+    pendingGroup,
+    postedGroup,
+    pendingChannel,
+    postedChannel,
+    byCategory,
+  };
 }
 
 export function deleteNews(id: string): boolean {
