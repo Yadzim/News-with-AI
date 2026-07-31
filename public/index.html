@@ -74,6 +74,46 @@
     </div>
 
     <div id="settingsOverlay" class="overlay" hidden></div>
+
+    <div id="tokenGateOverlay" class="overlay" hidden></div>
+    <aside
+      id="tokenGatePanel"
+      class="sheet sheet-sm"
+      aria-hidden="true"
+      role="dialog"
+      aria-label="Kirish"
+    >
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <h2>Maxfiy kalit</h2>
+        <button type="button" id="btnCloseTokenGate" class="icon-btn" aria-label="Yopish">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.17 12 2.89 5.71 4.3 4.29l6.29 6.3 6.3-6.3z"
+            />
+          </svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <p class="hint">Sozlamalar paneliga kirish uchun maxfiy kalitni kiriting.</p>
+        <form id="tokenGateForm" class="token-gate-form">
+          <label class="token-field">
+            <span>Maxfiy kalit</span>
+            <input
+              id="tokenGateInput"
+              type="password"
+              placeholder="Maxfiy kalitni kiriting"
+              autocomplete="current-password"
+              required
+            />
+          </label>
+          <p id="tokenGateStatus" class="status" aria-live="polite"></p>
+          <button type="submit" class="btn btn-primary">Kirish</button>
+        </form>
+      </div>
+    </aside>
+
     <aside id="settingsPanel" class="sheet" aria-hidden="true" role="dialog" aria-label="Sozlamalar">
       <div class="sheet-handle" aria-hidden="true"></div>
       <div class="sheet-head">
@@ -157,16 +197,9 @@
         </section>
 
         <section class="sheet-block">
-          <h3>API token</h3>
-          <label class="token-field">
-            <span>ADMIN_TOKEN (ixtiyoriy)</span>
-            <input
-              id="adminToken"
-              type="password"
-              placeholder="Bo‘sh qoldirish mumkin"
-              autocomplete="off"
-            />
-          </label>
+          <h3>Maxfiy kalit</h3>
+          <p class="hint">Saqlangan kalit bilan sozlamalar ochiladi.</p>
+          <button type="button" id="btnLogoutToken" class="btn btn-ghost">Kalitni o‘chirish</button>
         </section>
       </div>
     </aside>

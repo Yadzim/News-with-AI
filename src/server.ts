@@ -46,6 +46,10 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
+app.get("/api/auth/status", (_req, res) => {
+  res.json({ required: Boolean(config.adminToken) });
+});
+
 app.get("/api/meta", auth, (_req, res) => {
   res.json({
     categories: CATEGORIES,

@@ -7,6 +7,8 @@ const state = {
   posted: "all",
   categories: [],
   settingsOpen: false,
+  tokenGateOpen: false,
+  authRequired: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -39,7 +41,8 @@ function initTelegram() {
   if (tp.link_color) root.style.setProperty("--accent", tp.link_color);
 
   tg.BackButton.onClick(() => {
-    if (state.settingsOpen) closeSettings();
+    if (state.tokenGateOpen) closeTokenGate();
+    else if (state.settingsOpen) closeSettings();
     else tg.close();
   });
 }
@@ -53,13 +56,39 @@ function haptic(type = "light") {
 }
 
 function getToken() {
-  return localStorage.getItem("admin_token") || $("adminToken").value.trim();
+  return localStorage.getItem("admin_token") || "";
 }
 
-function saveToken() {
-  const token = $("adminToken").value.trim();
-  if (token) localStorage.setItem("admin_token", token);
+function saveToken(token) {
+  const value = (token || "").trim();
+  if (value) localStorage.setItem("admin_token", value);
   else localStorage.removeItem("admin_token");
+}
+
+function hasStoredToken() {
+  return Boolean(getToken());
+}
+
+async function fetchAuthStatus() {
+  const res = await fetch("/api/auth/status");
+  const data = await res.json().catch(() => ({}));
+  state.authRequired = Boolean(data.required);
+  return state.authRequired;
+}
+
+async function verifyToken(token) {
+  const res = await fetch("/api/meta", {
+    headers: {
+      Accept: "application/json",
+      "x-admin-token": token,
+    },
+  });
+  if (res.status === 401) return false;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return true;
 }
 
 async function api(path, options = {}) {
@@ -268,9 +297,12 @@ async function loadNews() {
 }
 
 async function refreshAll() {
-  saveToken();
   await loadMeta();
   await loadNews();
+}
+
+async function loadSettingsMeta() {
+  await loadMeta();
 }
 
 function withBusy(buttons, fn) {
@@ -288,6 +320,30 @@ function withBusy(buttons, fn) {
   };
 }
 
+function openTokenGate() {
+  state.tokenGateOpen = true;
+  $("tokenGateOverlay").hidden = false;
+  $("tokenGatePanel").classList.add("is-open");
+  $("tokenGatePanel").setAttribute("aria-hidden", "false");
+  document.body.classList.add("sheet-open");
+  $("tokenGateInput").value = "";
+  setStatus($("tokenGateStatus"), "", "");
+  tg?.BackButton?.show?.();
+  setTimeout(() => $("tokenGateInput").focus(), 200);
+  haptic("soft");
+}
+
+function closeTokenGate() {
+  state.tokenGateOpen = false;
+  $("tokenGateOverlay").hidden = true;
+  $("tokenGatePanel").classList.remove("is-open");
+  $("tokenGatePanel").setAttribute("aria-hidden", "true");
+  if (!state.settingsOpen) {
+    document.body.classList.remove("sheet-open");
+    tg?.BackButton?.hide?.();
+  }
+}
+
 function openSettings() {
   state.settingsOpen = true;
   $("settingsOverlay").hidden = false;
@@ -296,6 +352,31 @@ function openSettings() {
   document.body.classList.add("sheet-open");
   tg?.BackButton?.show?.();
   haptic("soft");
+}
+
+async function requestSettingsAccess() {
+  await fetchAuthStatus();
+
+  if (!state.authRequired || hasStoredToken()) {
+    try {
+      if (state.authRequired) {
+        const ok = await verifyToken(getToken());
+        if (!ok) {
+          saveToken("");
+          openTokenGate();
+          setStatus($("tokenGateStatus"), "Kalit noto‘g‘ri. Qayta kiriting.", "err");
+          return;
+        }
+      }
+      openSettings();
+      await loadSettingsMeta();
+    } catch (err) {
+      setStatus($("actionStatus"), err.message, "err");
+    }
+    return;
+  }
+
+  openTokenGate();
 }
 
 function closeSettings() {
@@ -307,11 +388,46 @@ function closeSettings() {
   tg?.BackButton?.hide?.();
 }
 
-$("adminToken").value = localStorage.getItem("admin_token") || "";
-
-$("btnOpenSettings").addEventListener("click", openSettings);
+$("btnOpenSettings").addEventListener("click", () => {
+  void requestSettingsAccess();
+});
 $("btnCloseSettings").addEventListener("click", closeSettings);
 $("settingsOverlay").addEventListener("click", closeSettings);
+
+$("btnCloseTokenGate").addEventListener("click", closeTokenGate);
+$("tokenGateOverlay").addEventListener("click", closeTokenGate);
+
+$("tokenGateForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const token = $("tokenGateInput").value.trim();
+  if (!token) {
+    setStatus($("tokenGateStatus"), "Maxfiy kalitni kiriting", "err");
+    return;
+  }
+
+  setStatus($("tokenGateStatus"), "Tekshirilmoqda...", "");
+  try {
+    const ok = await verifyToken(token);
+    if (!ok) {
+      setStatus($("tokenGateStatus"), "Noto‘g‘ri maxfiy kalit", "err");
+      haptic("rigid");
+      return;
+    }
+    saveToken(token);
+    closeTokenGate();
+    openSettings();
+    await loadSettingsMeta();
+    haptic("medium");
+  } catch (err) {
+    setStatus($("tokenGateStatus"), err.message, "err");
+  }
+});
+
+$("btnLogoutToken").addEventListener("click", () => {
+  saveToken("");
+  closeSettings();
+  haptic("light");
+});
 
 $("btnRefresh").addEventListener(
   "click",
@@ -379,7 +495,6 @@ $("btnPublishChannel").addEventListener(
 
 $("scheduleGroupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  saveToken();
   try {
     const data = await api("/api/schedule/group", {
       method: "PUT",
@@ -398,7 +513,6 @@ $("scheduleGroupForm").addEventListener("submit", async (e) => {
 
 $("scheduleChannelForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  saveToken();
   try {
     const data = await api("/api/schedule/channel", {
       method: "PUT",
@@ -491,7 +605,9 @@ $("newsList").addEventListener("click", async (e) => {
 initTelegram();
 renderStatusChips();
 
-refreshAll().catch((err) => {
-  $("newsList").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
-  setStatus($("actionStatus"), err.message, "err");
-});
+fetchAuthStatus()
+  .then(() => refreshAll())
+  .catch((err) => {
+    $("newsList").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    setStatus($("actionStatus"), err.message, "err");
+  });

@@ -555,6 +555,19 @@ body.sheet-open {
   overflow: hidden;
 }
 
+.sheet-sm {
+  max-height: min(55vh, 420px);
+}
+
+.token-gate-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.token-gate-form .btn-primary {
+  width: 100%;
+}
+
 @media (min-width: 760px) {
   .btn-row {
     grid-template-columns: 1fr 1fr 1fr;
