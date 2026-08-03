@@ -212,13 +212,14 @@ Tekshiruv: brauzerda `https://news.example.com/` ochilsin.
 
 1. Botni guruhga qo‘shing va **admin** qiling.
 2. Guruhda **Topics (Forum)** yoqilgan bo‘lsin.
-3. Topic ID’larni `.env` dagi `TOPIC_*` ga yozing.
+3. Topic ID’larni admin panel → **Kategoriyalar** bo‘limida biriktiring
+   (`.env` dagi `TOPIC_*` faqat birinchi ishga tushirishda ishlatiladi).
 4. `@BotFather` → Bot Settings → **Menu Button** → URL: `https://news.example.com/`
 5. `.env` da `WEBAPP_URL` shu URL bilan bir xil bo‘lsin.
 6. Restart:
 
 ```bash
-pm2 restart news-bot news-admin
+sudo systemctl restart news-bot news-admin
 ```
 
 Botga `/start` yuboring — **Mini App — o‘qish** tugmasi chiqishi kerak.
@@ -263,8 +264,12 @@ cd /var/www/news-bot
 ./deploy.sh
 ```
 
-Skript: `git pull` → (kerak bo‘lsa) `npm ci` → `systemctl restart`.
-`package-lock.json` o‘zgarmasa `npm ci` o‘tkazib yuboriladi (tez).
+Skript: `git pull` → (kerak bo‘lsa) `npm ci` → `systemctl restart` →
+**health check**. `package-lock.json` o‘zgarmasa `npm ci` o‘tkazib yuboriladi.
+
+Skript xizmat ishga tushgach bir necha soniya kutadi, `NRestarts` o‘smaganini
+tekshiradi va `/api/health` ga so‘rov yuboradi — shuning uchun yiqilgan xizmat
+"OK" deb hisoblanmaydi. Xato bo‘lsa `journalctl` chiqishi ko‘rsatiladi.
 
 ### GitHub Actions (avto-deploy)
 
@@ -323,13 +328,15 @@ sudo ufw status
 | `chat not found` | `TELEGRAM_GROUP_ID=-100...`; bot guruhda admin; kerak bo‘lsa botni chiqarib qayta qo‘shing |
 | Mini App ochilmaydi | HTTPS, to‘g‘ri `WEBAPP_URL`, BotFather Menu Button |
 | API `401 Unauthorized` | Sozlamalarda `ADMIN_TOKEN` ni kiriting |
-| `news-admin` darhol o‘chadi | `.env` da `ADMIN_TOKEN` (min 24 belgi) yoki `ADMIN_USER_IDS` yo‘q — `journalctl -u news-admin -n 20` ga qarang |
+| `news-admin` darhol o‘chadi | `.env` da `ADMIN_TOKEN` (min 24 belgi) yoki `ADMIN_USER_IDS` yo‘q — `journalctl -u news-admin -n 40` ga qarang |
+| Deploy "OK" deydi, lekin panel ishlamaydi | Xizmat crash-loopda: `systemctl show -p NRestarts --value news-admin` 0 dan katta. Sababi `journalctl -u news-admin -n 40` da |
+| `NODE_MODULE_VERSION` mos emas | `node_modules` boshqa Node versiyasida o‘rnatilgan: `npm rebuild better-sqlite3` yoki `rm -rf node_modules && npm ci` |
 | Postda audio yo‘q | `ffmpeg -version` ni tekshiring; admin panelda TTS yoqilganmi |
 | `data/` ga yozib bo‘lmayapti | `sudo chown -R www-data:www-data /var/www/news-bot/data` |
 | Gemini `429` | Free tier limiti; biroz kutib qayta urining |
 | Gemini `404` model | `.env` da `GEMINI_MODEL=gemini-2.0-flash` yoki `gemini-3.1-flash-lite` |
 | `better-sqlite3` build xato | `build-essential` o‘rnating, keyin `npm ci` |
-| Post kelmaydi | Topic ID noto‘g‘ri; `pm2 logs news-admin` ni ko‘ring |
+| Post kelmaydi | Topic ID noto‘g‘ri; `journalctl -u news-admin -n 40` ni ko‘ring |
 | Ikki marta post | Ikki marta `news-admin` / schedule ishlayotganini tekshiring |
 
 ---

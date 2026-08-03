@@ -30,6 +30,25 @@ npm run fetch                 # Bir martalik RSS + AI (test)
 (Ikki marta post ketmaydi — postlash atomik `claim` bilan himoyalangan — lekin
 Gemini kvotasi bekorga sarflanadi.)
 
+### Node versiyasi
+
+Server va CI **Node 20** da ishlaydi. Lokalda boshqa major versiyaga o‘tsangiz
+`better-sqlite3` native moduli mos kelmay qoladi:
+
+```
+Error: The module ... was compiled against a different Node.js version
+using NODE_MODULE_VERSION 127. This version of Node.js requires
+NODE_MODULE_VERSION 137.
+```
+
+Yechim — modulni qayta yig‘ish yoki serverdagi versiyaga qaytish:
+
+```bash
+npm rebuild better-sqlite3
+# yoki
+rm -rf node_modules && npm ci
+```
+
 ## Admin panel
 
 ```bash
