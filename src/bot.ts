@@ -1,68 +1,86 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
-import { CATEGORIES, config, type Category } from "./config.js";
-import { getCategoryByThreadId, getNewsByCategory } from "./db.js";
+import { config } from "./config.js";
+import {
+  getCategoryById,
+  getCategoryByThreadId,
+  getNewsByCategory,
+  listActiveCategories,
+  type CategoryRow,
+} from "./db.js";
 import { formatNewsMessage } from "./publisher.js";
 
 export const bot = new Bot(config.telegramBotToken);
 
+/** Kategoriyalar dinamik — klaviatura har safar DB dan quriladi */
 function categoryKeyboard(): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   if (config.webappUrl) {
     keyboard.webApp("📱 Mini App — o‘qish", config.webappUrl).row();
   }
-  for (const [i, category] of CATEGORIES.entries()) {
-    keyboard.text(category, `cat:${category}:0`);
+
+  const categories = listActiveCategories();
+  for (const [i, category] of categories.entries()) {
+    // callback_data 64 baytdan oshmasligi uchun nom emas, id ishlatiladi
+    keyboard.text(category.name, `cat:${category.id}:0`);
     if (i % 2 === 1) keyboard.row();
   }
-  if (CATEGORIES.length % 2 === 1) keyboard.row();
+  if (categories.length % 2 === 1) keyboard.row();
+
   return keyboard;
 }
 
-function moreNewsKeyboard(category: Category, nextOffset: number): InlineKeyboard {
+function moreNewsKeyboard(
+  category: CategoryRow,
+  nextOffset: number,
+): InlineKeyboard {
   return new InlineKeyboard()
-    .text("Yana yangilik", `cat:${category}:${nextOffset}`)
+    .text("Yana yangilik", `cat:${category.id}:${nextOffset}`)
     .row()
     .text("Kategoriyalar", "menu:categories");
 }
 
 /** Topic ichidan yozilganda message_thread_id → kategoriya */
-function resolveTopicCategory(ctx: Context): Category | null {
+function resolveTopicCategory(ctx: Context): CategoryRow | null {
   const threadId = ctx.message?.message_thread_id;
   if (threadId == null) return null;
-  return getCategoryByThreadId(threadId);
+  return getCategoryByThreadId(threadId) ?? null;
 }
 
 async function sendNewsByCategory(
   ctx: Context,
-  category: Category,
+  category: CategoryRow,
   offset = 0,
 ): Promise<void> {
-  const rows = getNewsByCategory(category, offset, 1);
+  const rows = getNewsByCategory(category.name, offset, 1);
   if (rows.length === 0) {
     await ctx.reply(
       offset === 0
-        ? `"${category}" bo‘yicha hozircha yangilik yo‘q.`
-        : `"${category}" bo‘yicha boshqa yangilik qolmadi.`,
+        ? `"${category.name}" bo‘yicha hozircha yangilik yo‘q.`
+        : `"${category.name}" bo‘yicha boshqa yangilik qolmadi.`,
       { reply_markup: categoryKeyboard() },
     );
     return;
   }
 
-  const news = rows[0]!;
-  await ctx.reply(formatNewsMessage(news), {
+  await ctx.reply(formatNewsMessage(rows[0]!), {
     reply_markup: moreNewsKeyboard(category, offset + 1),
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
 }
 
-async function sendWelcome(ctx: Context) {
+async function sendWelcome(ctx: Context): Promise<void> {
   const category = resolveTopicCategory(ctx);
   if (category) {
-    await ctx.reply(
-      `Salom! Bu topic: ${category}. Eng so‘nggi yangilik:`,
-    );
+    await ctx.reply(`Salom! Bu topic: ${category.name}. Eng so‘nggi yangilik:`);
     await sendNewsByCategory(ctx, category, 0);
+    return;
+  }
+
+  if (listActiveCategories().length === 0) {
+    await ctx.reply(
+      "Salom! Hozircha kategoriyalar sozlanmagan. Admin panelda kategoriya qo‘shing.",
+    );
     return;
   }
 
@@ -95,12 +113,12 @@ bot.callbackQuery("menu:categories", async (ctx) => {
   });
 });
 
-bot.callbackQuery(/^cat:(.+):(\d+)$/, async (ctx) => {
-  const category = ctx.match[1] as Category;
+bot.callbackQuery(/^cat:([0-9a-fA-F-]{36}):(\d+)$/, async (ctx) => {
+  const category = getCategoryById(ctx.match[1]!);
   const offset = Number(ctx.match[2]);
 
-  if (!(CATEGORIES as readonly string[]).includes(category)) {
-    await ctx.answerCallbackQuery({ text: "Noma’lum kategoriya" });
+  if (!category || !category.is_active) {
+    await ctx.answerCallbackQuery({ text: "Bu kategoriya endi mavjud emas" });
     return;
   }
 

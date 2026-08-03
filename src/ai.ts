@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
-import { CATEGORIES, config, type Category } from "./config.js";
+import { config, type Category } from "./config.js";
+import { listActiveCategoryNames, resolveCategoryName } from "./db.js";
 
 const genAI = new GoogleGenerativeAI(config.geminiApiKey);
 
@@ -21,13 +22,7 @@ let lastRequestAt = 0;
 const aiResponseSchema = z.object({
   title_uz: z.string().min(1),
   bullets: z.array(z.string().min(1)).min(3).max(4),
-  category: z.enum([
-    "AI",
-    "Hardware",
-    "Cybersecurity",
-    "Startups",
-    "General Tech",
-  ]),
+  category: z.string().min(1),
 });
 
 export type ProcessedNews = {
@@ -54,7 +49,7 @@ async function waitForRateLimit(): Promise<void> {
   lastRequestAt = Date.now();
 }
 
-function isRateLimitError(err: unknown): boolean {
+export function isRateLimitError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { status?: number; message?: string };
   return (
@@ -65,7 +60,7 @@ function isRateLimitError(err: unknown): boolean {
   );
 }
 
-function retryDelayMs(err: unknown, attempt: number): number {
+export function retryDelayMs(err: unknown, attempt: number): number {
   const msg =
     err && typeof err === "object" && "message" in err
       ? String((err as { message: unknown }).message)
@@ -85,20 +80,24 @@ function retryDelayMs(err: unknown, attempt: number): number {
   return Math.min(5_000 * 3 ** (attempt - 1), 60_000);
 }
 
-function buildPrompt({ title, content, url }: ProcessNewsInput): string {
+function buildPrompt(
+  { title, content, url }: ProcessNewsInput,
+  categories: string[],
+): string {
   return `Siz texnologiya yangiliklari muharririsiz. Quyidagi yangilikni o'zbek tiliga tarjima qiling va soddalashtiring.
 
 Talablar:
 1. Sarlavhani o'zbek tiliga aniq va qiziqarli qilib tarjima qiling.
 2. Murakkab texnik terminlarni oddiy, tushunarli tilda izohlab bering.
 3. Yangilikni 3 yoki 4 ta asosiy bullet pointda xulosalash (har biri 1–2 jumla).
-4. Kategoriyani faqat shulardan biriga belgilang: ${CATEGORIES.join(", ")}.
+4. Kategoriyani faqat shu ro'yxatdan tanlang (aynan shu yozuv bilan): ${categories.join(", ")}.
+   Hech biriga to'liq mos kelmasa, eng yaqinini tanlang.
 
 Faqat JSON qaytaring (boshqa matn yo'q):
 {
   "title_uz": "...",
   "bullets": ["...", "...", "..."],
-  "category": "AI"
+  "category": "${categories[0]}"
 }
 
 Manba URL: ${url}
@@ -118,56 +117,55 @@ function extractJson(text: string): unknown {
   }
 }
 
-function normalizeCategory(value: string): Category {
-  const found = CATEGORIES.find(
-    (c) => c.toLowerCase() === value.toLowerCase().trim(),
-  );
-  return found ?? "General Tech";
+function readString(raw: unknown, key: string): string | undefined {
+  if (typeof raw !== "object" || raw === null || !(key in raw)) return undefined;
+  const value = (raw as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
 }
 
-function parseAiPayload(raw: unknown, fallbackTitle: string): ProcessedNews {
+export function parseAiPayload(
+  raw: unknown,
+  fallbackTitle: string,
+  resolveCategory: (name: string) => string | null = resolveCategoryName,
+): ProcessedNews {
   const parsed = aiResponseSchema.safeParse(raw);
+
+  const rawCategory = parsed.success
+    ? parsed.data.category
+    : (readString(raw, "category") ?? "");
+  const category = resolveCategory(rawCategory);
+  if (!category) {
+    throw new Error(
+      "Aktiv kategoriya yo‘q — admin panelda kamida bittasini qo‘shing",
+    );
+  }
+
   if (parsed.success) {
     return {
       title_uz: parsed.data.title_uz.trim(),
-      summary_uz: parsed.data.bullets.join("\n"),
-      category: parsed.data.category,
+      summary_uz: parsed.data.bullets.map((b) => b.trim()).join("\n"),
+      category,
     };
   }
-
-  const category =
-    typeof raw === "object" &&
-    raw !== null &&
-    "category" in raw &&
-    typeof (raw as { category: unknown }).category === "string"
-      ? normalizeCategory((raw as { category: string }).category)
-      : "General Tech";
-
-  const title_uz =
-    typeof raw === "object" &&
-    raw !== null &&
-    "title_uz" in raw &&
-    typeof (raw as { title_uz: unknown }).title_uz === "string"
-      ? (raw as { title_uz: string }).title_uz
-      : fallbackTitle;
 
   const bullets =
     typeof raw === "object" &&
     raw !== null &&
-    "bullets" in raw &&
-    Array.isArray((raw as { bullets: unknown }).bullets)
+    Array.isArray((raw as { bullets?: unknown }).bullets)
       ? ((raw as { bullets: unknown[] }).bullets.filter(
-          (b) => typeof b === "string" && b.trim(),
-        ) as string[])
+          (b): b is string => typeof b === "string" && Boolean(b.trim()),
+        ))
       : [];
 
   if (bullets.length < 3) {
     throw new Error("Bullet pointlar yetarli emas");
   }
 
+  const title_uz = readString(raw, "title_uz") ?? fallbackTitle;
+
   return {
     title_uz: title_uz.trim() || fallbackTitle,
-    summary_uz: bullets.slice(0, 4).join("\n"),
+    summary_uz: bullets.slice(0, 4).map((b) => b.trim()).join("\n"),
     category,
   };
 }
@@ -175,14 +173,20 @@ function parseAiPayload(raw: unknown, fallbackTitle: string): ProcessedNews {
 export async function processNews(
   input: ProcessNewsInput,
 ): Promise<ProcessedNews> {
+  const categories = listActiveCategoryNames();
+  if (categories.length === 0) {
+    throw new Error(
+      "Aktiv kategoriya yo‘q — admin panelda kamida bittasini qo‘shing",
+    );
+  }
+
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       await waitForRateLimit();
-      const result = await model.generateContent(buildPrompt(input));
-      const text = result.response.text();
-      const raw = extractJson(text);
+      const result = await model.generateContent(buildPrompt(input, categories));
+      const raw = extractJson(result.response.text());
       return parseAiPayload(raw, input.title);
     } catch (err) {
       lastError = err;

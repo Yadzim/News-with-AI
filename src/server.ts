@@ -2,216 +2,449 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Bot } from "grammy";
-import { CATEGORIES, config, type Category } from "./config.js";
+import { safeEqual, verifyInitData } from "./auth.js";
+import { config } from "./config.js";
 import {
+  POSTED_FILTERS,
+  createCategory,
+  createSource,
+  deleteCategory,
   deleteNews,
+  deleteSource,
   getNewsStats,
   getTargetScheduleSettings,
+  isTtsEnabled,
+  listActiveCategoryNames,
+  listCategories,
   listNews,
+  listSources,
   saveTargetSchedule,
+  setTtsEnabled,
+  updateCategory,
+  updateSource,
+  type PostedFilter,
 } from "./db.js";
-import { fetchAndProcessNews } from "./fetcher.js";
+import { cancelFetch, getFetchJobState, startFetch } from "./fetch-job.js";
 import {
   publishPendingToChannel,
   publishPendingToGroup,
 } from "./publisher.js";
-import { applyScheduleFromDb, parseHourMinute, startScheduleWatcher } from "./schedule.js";
+import {
+  applyScheduleFromDb,
+  parseHourMinute,
+  startScheduleWatcher,
+} from "./schedule.js";
+import { publisherBot } from "./telegram.js";
+import { deleteAudioFile, hasFfmpeg } from "./tts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
 
+const MIN_ADMIN_TOKEN_LENGTH = 24;
+
+// ---------------------------------------------------------------------------
+// Ishga tushirishdan oldingi tekshiruv
+// ---------------------------------------------------------------------------
+
+const hasToken = config.adminToken.length >= MIN_ADMIN_TOKEN_LENGTH;
+const hasTelegramAuth = config.adminUserIds.length > 0;
+
+if (!hasToken && !hasTelegramAuth) {
+  console.error(
+    "Admin API himoyalanmagan holda ishga tushmaydi.\n" +
+      `  - ADMIN_TOKEN kamida ${MIN_ADMIN_TOKEN_LENGTH} belgidan iborat bo‘lsin, yoki\n` +
+      "  - ADMIN_USER_IDS ga Telegram foydalanuvchi ID(lar)ini yozing.\n" +
+      "Kalit yaratish: openssl rand -hex 32",
+  );
+  if (config.adminToken.length > 0) {
+    console.error(
+      `  Hozirgi ADMIN_TOKEN juda qisqa (${config.adminToken.length} belgi).`,
+    );
+  }
+  process.exit(1);
+}
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
+// ---------------------------------------------------------------------------
+// Autentifikatsiya
+// ---------------------------------------------------------------------------
+
+/**
+ * Ikki yo‘l bilan kirish mumkin:
+ *  1. `x-admin-token` — ADMIN_TOKEN bilan aynan mos kelishi kerak.
+ *  2. `x-telegram-init-data` — Mini App imzosi to‘g‘ri va user ID
+ *     ADMIN_USER_IDS ro‘yxatida bo‘lsa.
+ * Token query parametrida qabul qilinmaydi (nginx log/Referer’ga tushmasin).
+ */
 function auth(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction,
 ): void {
-  if (!config.adminToken) {
-    next();
-    return;
+  if (hasToken) {
+    const header = req.header("x-admin-token") || "";
+    if (header && safeEqual(header, config.adminToken)) {
+      next();
+      return;
+    }
   }
-  const header = req.header("x-admin-token") || "";
-  const query = typeof req.query.token === "string" ? req.query.token : "";
-  if (header === config.adminToken || query === config.adminToken) {
-    next();
-    return;
+
+  if (hasTelegramAuth) {
+    const initData = req.header("x-telegram-init-data") || "";
+    const verified = verifyInitData(initData, config.telegramBotToken);
+    if (verified && config.adminUserIds.includes(verified.userId)) {
+      next();
+      return;
+    }
   }
+
   res.status(401).json({ error: "Unauthorized" });
 }
+
+/** Handler ichidagi Error’ni 400 ga aylantiradi */
+function handle(
+  fn: (req: express.Request, res: express.Response) => void | Promise<void>,
+) {
+  return async (req: express.Request, res: express.Response): Promise<void> => {
+    try {
+      await fn(req, res);
+    } catch (err) {
+      console.error(err);
+      if (!res.headersSent) {
+        res.status(400).json({
+          error: err instanceof Error ? err.message : "So‘rov bajarilmadi",
+        });
+      }
+    }
+  };
+}
+
+function optionalThreadId(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  if (!Number.isInteger(num)) {
+    throw new Error("Topic ID butun son bo‘lishi kerak");
+  }
+  return num;
+}
+
+// ---------------------------------------------------------------------------
+// Umumiy
+// ---------------------------------------------------------------------------
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
 app.get("/api/auth/status", (_req, res) => {
-  res.json({ required: Boolean(config.adminToken) });
+  res.json({ required: true, token: hasToken, telegram: hasTelegramAuth });
 });
 
-app.get("/api/meta", auth, (_req, res) => {
-  res.json({
-    categories: CATEGORIES,
-    schedule: getTargetScheduleSettings(),
-    channelConfigured: Boolean(config.telegramChannelId),
-    stats: getNewsStats(),
-  });
-});
-
-app.get("/api/stats", auth, (_req, res) => {
-  res.json(getNewsStats());
-});
-
-app.get("/api/news", auth, (req, res) => {
-  const categoryRaw = String(req.query.category || "all");
-  const category =
-    categoryRaw === "all"
-      ? "all"
-      : (CATEGORIES as readonly string[]).includes(categoryRaw)
-        ? (categoryRaw as Category)
-        : "all";
-
-  const postedRaw = String(req.query.posted || "all");
-  const postedAllowed = [
-    "all",
-    "yes",
-    "no",
-    "group_yes",
-    "group_no",
-    "channel_yes",
-    "channel_no",
-  ] as const;
-  const posted = postedAllowed.includes(postedRaw as (typeof postedAllowed)[number])
-    ? (postedRaw as (typeof postedAllowed)[number])
-    : "all";
-
-  const result = listNews({
-    category,
-    posted,
-    q: typeof req.query.q === "string" ? req.query.q : undefined,
-    page: Number(req.query.page) || 1,
-    limit: Number(req.query.limit) || 20,
-  });
-
-  res.json(result);
-});
-
-app.delete("/api/news/:id", auth, (req, res) => {
-  const id = String(req.params.id);
-  const ok = deleteNews(id);
-  if (!ok) {
-    res.status(404).json({ error: "Topilmadi" });
-    return;
-  }
-  res.json({ ok: true });
-});
-
-app.post("/api/fetch", auth, async (_req, res) => {
-  try {
-    const added = await fetchAndProcessNews({ maxPerFeed: 5 });
-    res.json({ ok: true, added, stats: getNewsStats() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Fetch xatosi",
+app.get(
+  "/api/meta",
+  auth,
+  handle((_req, res) => {
+    res.json({
+      categories: listActiveCategoryNames(),
+      schedule: getTargetScheduleSettings(),
+      channelConfigured: Boolean(config.telegramChannelId),
+      tts: { enabled: isTtsEnabled(), ffmpeg: hasFfmpeg() },
+      stats: getNewsStats(),
     });
-  }
-});
+  }),
+);
 
-app.post("/api/publish/group", auth, async (_req, res) => {
-  try {
-    const bot = new Bot(config.telegramBotToken);
-    const published = await publishPendingToGroup(bot, 50);
+app.get(
+  "/api/stats",
+  auth,
+  handle((_req, res) => {
+    res.json(getNewsStats());
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Yangiliklar
+// ---------------------------------------------------------------------------
+
+app.get(
+  "/api/news",
+  auth,
+  handle((req, res) => {
+    const categoryRaw = String(req.query.category || "all");
+    const known = listActiveCategoryNames();
+    const category = known.includes(categoryRaw) ? categoryRaw : "all";
+
+    const postedRaw = String(req.query.posted || "all");
+    const posted = (POSTED_FILTERS as readonly string[]).includes(postedRaw)
+      ? (postedRaw as PostedFilter)
+      : "all";
+
+    res.json(
+      listNews({
+        category,
+        posted,
+        q: typeof req.query.q === "string" ? req.query.q : undefined,
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 20,
+      }),
+    );
+  }),
+);
+
+app.delete(
+  "/api/news/:id",
+  auth,
+  handle((req, res) => {
+    const removed = deleteNews(String(req.params.id));
+    if (!removed) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    deleteAudioFile(removed.audio_path);
+    res.json({ ok: true, stats: getNewsStats() });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Fetch (fon rejimida, qulf bilan)
+// ---------------------------------------------------------------------------
+
+app.post(
+  "/api/fetch",
+  auth,
+  handle((_req, res) => {
+    const { started } = startFetch();
+    if (!started) {
+      res.status(409).json({
+        error: "Fetch allaqachon ishlayapti",
+        job: getFetchJobState(),
+      });
+      return;
+    }
+    res.status(202).json({ ok: true, job: getFetchJobState() });
+  }),
+);
+
+app.get(
+  "/api/fetch/status",
+  auth,
+  handle((_req, res) => {
+    res.json({ job: getFetchJobState(), stats: getNewsStats() });
+  }),
+);
+
+app.post(
+  "/api/fetch/cancel",
+  auth,
+  handle((_req, res) => {
+    res.json({ ok: cancelFetch(), job: getFetchJobState() });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Publish
+// ---------------------------------------------------------------------------
+
+app.post(
+  "/api/publish/group",
+  auth,
+  handle(async (_req, res) => {
+    const published = await publishPendingToGroup(publisherBot, 50);
     res.json({ ok: true, published, stats: getNewsStats() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Publish xatosi",
-    });
-  }
-});
+  }),
+);
 
-app.post("/api/publish/channel", auth, async (_req, res) => {
-  try {
+app.post(
+  "/api/publish/channel",
+  auth,
+  handle(async (_req, res) => {
     if (!config.telegramChannelId) {
       res.status(400).json({ error: "TELEGRAM_CHANNEL_ID sozlanmagan" });
       return;
     }
-    const bot = new Bot(config.telegramBotToken);
-    const published = await publishPendingToChannel(bot, 50);
+    const published = await publishPendingToChannel(publisherBot, 50);
     res.json({ ok: true, published, stats: getNewsStats() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Publish xatosi",
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Jadval
+// ---------------------------------------------------------------------------
+
+app.get(
+  "/api/schedule",
+  auth,
+  handle((_req, res) => {
+    res.json(getTargetScheduleSettings());
+  }),
+);
+
+function saveSchedule(target: "group" | "channel") {
+  return handle((req: express.Request, res: express.Response) => {
+    const morning = String(req.body?.morning || "").trim();
+    const evening = String(req.body?.evening || "").trim();
+    const enabled = Boolean(req.body?.enabled);
+
+    if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
+      res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
+      return;
+    }
+
+    const saved = saveTargetSchedule(target, { morning, evening, enabled });
+    const applied = applyScheduleFromDb();
+    res.json({ ...saved, applied: applied.message });
+  });
+}
+
+app.put("/api/schedule/group", auth, saveSchedule("group"));
+app.put("/api/schedule/channel", auth, saveSchedule("channel"));
+
+// ---------------------------------------------------------------------------
+// Kategoriyalar (CRUD)
+// ---------------------------------------------------------------------------
+
+app.get(
+  "/api/categories",
+  auth,
+  handle((_req, res) => {
+    res.json({ items: listCategories(true) });
+  }),
+);
+
+app.post(
+  "/api/categories",
+  auth,
+  handle((req, res) => {
+    const created = createCategory({
+      name: String(req.body?.name || ""),
+      thread_id: optionalThreadId(req.body?.thread_id),
+      is_active: req.body?.is_active === undefined ? true : Boolean(req.body.is_active),
     });
-  }
-});
+    res.status(201).json(created);
+  }),
+);
 
-/** @deprecated /api/publish/group */
-app.post("/api/publish", auth, async (_req, res) => {
-  try {
-    const bot = new Bot(config.telegramBotToken);
-    const published = await publishPendingToGroup(bot, 50);
-    res.json({ ok: true, published, stats: getNewsStats() });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Publish xatosi",
+app.put(
+  "/api/categories/:id",
+  auth,
+  handle((req, res) => {
+    const updated = updateCategory(String(req.params.id), {
+      ...(req.body?.name === undefined ? {} : { name: String(req.body.name) }),
+      ...(req.body?.thread_id === undefined
+        ? {}
+        : { thread_id: optionalThreadId(req.body.thread_id) }),
+      ...(req.body?.is_active === undefined
+        ? {}
+        : { is_active: Boolean(req.body.is_active) }),
+      ...(req.body?.sort_order === undefined
+        ? {}
+        : { sort_order: Number(req.body.sort_order) }),
     });
-  }
-});
+    if (!updated) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    res.json(updated);
+  }),
+);
 
-app.get("/api/schedule", auth, (_req, res) => {
-  res.json(getTargetScheduleSettings());
-});
+app.delete(
+  "/api/categories/:id",
+  auth,
+  handle((req, res) => {
+    if (!deleteCategory(String(req.params.id))) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
 
-app.put("/api/schedule/group", auth, (req, res) => {
-  const morning = String(req.body?.morning || "").trim();
-  const evening = String(req.body?.evening || "").trim();
-  const enabled = Boolean(req.body?.enabled);
+// ---------------------------------------------------------------------------
+// RSS manbalari (CRUD)
+// ---------------------------------------------------------------------------
 
-  if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
-    res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
-    return;
-  }
+app.get(
+  "/api/sources",
+  auth,
+  handle((_req, res) => {
+    res.json({ items: listSources(true) });
+  }),
+);
 
-  const saved = saveTargetSchedule("group", { morning, evening, enabled });
-  const applied = applyScheduleFromDb();
-  res.json({ ...saved, applied: applied.message });
-});
+app.post(
+  "/api/sources",
+  auth,
+  handle((req, res) => {
+    const created = createSource({
+      name: String(req.body?.name || ""),
+      url: String(req.body?.url || ""),
+      is_active: req.body?.is_active === undefined ? true : Boolean(req.body.is_active),
+    });
+    res.status(201).json(created);
+  }),
+);
 
-app.put("/api/schedule/channel", auth, (req, res) => {
-  const morning = String(req.body?.morning || "").trim();
-  const evening = String(req.body?.evening || "").trim();
-  const enabled = Boolean(req.body?.enabled);
+app.put(
+  "/api/sources/:id",
+  auth,
+  handle((req, res) => {
+    const updated = updateSource(String(req.params.id), {
+      ...(req.body?.name === undefined ? {} : { name: String(req.body.name) }),
+      ...(req.body?.url === undefined ? {} : { url: String(req.body.url) }),
+      ...(req.body?.is_active === undefined
+        ? {}
+        : { is_active: Boolean(req.body.is_active) }),
+      ...(req.body?.sort_order === undefined
+        ? {}
+        : { sort_order: Number(req.body.sort_order) }),
+    });
+    if (!updated) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    res.json(updated);
+  }),
+);
 
-  if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
-    res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
-    return;
-  }
+app.delete(
+  "/api/sources/:id",
+  auth,
+  handle((req, res) => {
+    if (!deleteSource(String(req.params.id))) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
 
-  const saved = saveTargetSchedule("channel", { morning, evening, enabled });
-  const applied = applyScheduleFromDb();
-  res.json({ ...saved, applied: applied.message });
-});
+// ---------------------------------------------------------------------------
+// TTS sozlamasi
+// ---------------------------------------------------------------------------
 
-/** @deprecated /api/schedule/group */
-app.put("/api/schedule", auth, (req, res) => {
-  const morning = String(req.body?.morning || "").trim();
-  const evening = String(req.body?.evening || "").trim();
-  const enabled = Boolean(req.body?.enabled);
+app.get(
+  "/api/settings/tts",
+  auth,
+  handle((_req, res) => {
+    res.json({ enabled: isTtsEnabled(), ffmpeg: hasFfmpeg() });
+  }),
+);
 
-  if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
-    res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
-    return;
-  }
+app.put(
+  "/api/settings/tts",
+  auth,
+  handle((req, res) => {
+    setTtsEnabled(Boolean(req.body?.enabled));
+    res.json({ enabled: isTtsEnabled(), ffmpeg: hasFfmpeg() });
+  }),
+);
 
-  const saved = saveTargetSchedule("group", { morning, evening, enabled });
-  const applied = applyScheduleFromDb();
-  res.json({ ...saved, applied: applied.message });
-});
+// ---------------------------------------------------------------------------
+// Static + xato ushlagich
+// ---------------------------------------------------------------------------
 
 if (existsSync(publicDir)) {
   app.use(express.static(publicDir));
@@ -220,14 +453,29 @@ if (existsSync(publicDir)) {
   });
 }
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
-  res.status(500).json({ error: "Server xatosi" });
-});
+app.use(
+  (
+    err: unknown,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: "Server xatosi" });
+  },
+);
 
 startScheduleWatcher();
 
 app.listen(config.port, () => {
   console.log(`Admin API: http://127.0.0.1:${config.port}`);
   console.log(`UI: http://127.0.0.1:${config.port}/`);
+  console.log(
+    `Auth: ${[hasToken ? "token" : null, hasTelegramAuth ? "telegram" : null]
+      .filter(Boolean)
+      .join(" + ")}`,
+  );
+  if (isTtsEnabled() && !hasFfmpeg()) {
+    console.warn("TTS yoqilgan, lekin ffmpeg yo‘q — audio yuborilmaydi");
+  }
 });
