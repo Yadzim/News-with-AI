@@ -151,7 +151,71 @@
             <button type="button" id="btnPublishGroup" class="btn btn-accent">Guruhga yuborish</button>
             <button type="button" id="btnPublishChannel" class="btn btn-accent">Kanalga yuborish</button>
           </div>
+          <div id="fetchProgress" class="progress" hidden>
+            <div class="progress-track"><div id="fetchProgressBar" class="progress-bar"></div></div>
+            <div class="progress-meta">
+              <span id="fetchProgressText">—</span>
+              <button type="button" id="btnCancelFetch" class="btn-link">Bekor qilish</button>
+            </div>
+          </div>
           <p id="actionStatus" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="sheet-block">
+          <h3>Kategoriyalar</h3>
+          <p class="hint">
+            Topic ID — forum guruhdagi <code>message_thread_id</code>. Bo‘sh
+            qoldirilsa yangilik guruhning umumiy topic’iga tushadi.
+          </p>
+          <div id="categoryList" class="crud-list"></div>
+          <form id="categoryForm" class="crud-form">
+            <label>
+              Nomi
+              <input id="categoryName" type="text" placeholder="Masalan: Fintex" required />
+            </label>
+            <label>
+              Topic ID
+              <input id="categoryThread" type="number" inputmode="numeric" placeholder="ixtiyoriy" />
+            </label>
+            <button type="submit" class="btn btn-primary">Qo‘shish</button>
+          </form>
+          <p id="categoryStatus" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="sheet-block">
+          <h3>RSS manbalari</h3>
+          <p class="hint">Faqat to‘g‘ridan-to‘g‘ri RSS/Atom feed havolasi (http yoki https).</p>
+          <div id="sourceList" class="crud-list"></div>
+          <form id="sourceForm" class="crud-form">
+            <label>
+              Nomi
+              <input id="sourceName" type="text" placeholder="Masalan: Ars Technica" required />
+            </label>
+            <label class="crud-wide">
+              Feed URL
+              <input
+                id="sourceUrl"
+                type="url"
+                placeholder="https://example.com/feed/"
+                required
+              />
+            </label>
+            <button type="submit" class="btn btn-primary">Qo‘shish</button>
+          </form>
+          <p id="sourceStatus" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="sheet-block">
+          <h3>Ovozli xabar (TTS)</h3>
+          <p class="hint">
+            Yoqilsa, har bir post matndan keyin yangilikni o‘qib beruvchi ovozli
+            xabar ham yuboriladi. Serverda <code>ffmpeg</code> kerak.
+          </p>
+          <label class="switch-row">
+            <input type="checkbox" id="ttsEnabled" />
+            <span>Audio yuborish yoqilgan</span>
+          </label>
+          <p id="ttsStatus" class="status" aria-live="polite"></p>
         </section>
 
         <section class="sheet-block">
@@ -203,16 +267,6 @@
         </section>
       </div>
     </aside>
-
-    <!-- hidden selects for filter state compatibility -->
-    <select id="filterCategory" hidden>
-      <option value="all">all</option>
-    </select>
-    <select id="filterPosted" hidden>
-      <option value="all">all</option>
-      <option value="no">no</option>
-      <option value="yes">yes</option>
-    </select>
 
     <script src="/js/admin.js"></script>
   </body>

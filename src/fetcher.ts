@@ -1,25 +1,27 @@
 import Parser from "rss-parser";
 import { processNews } from "./ai.js";
-import { insertNews, newsExists, similarTitleExists } from "./db.js";
-import { normalizeSourceUrl } from "./url.js";
+import {
+  insertNews,
+  isUrlBlocked,
+  listActiveSources,
+  recordSourceResult,
+  similarTitleExists,
+  type SourceRow,
+} from "./db.js";
+import { sanitizeSourceUrl } from "./url.js";
 
-const parser = new Parser({
-  timeout: 15_000,
-  headers: {
-    Accept: "application/rss+xml, application/xml, text/xml, */*",
-    "User-Agent":
-      "Mozilla/5.0 (compatible; AI-News-Bot/1.0; +https://github.com/news-bot)",
-  },
-});
+const parser = new Parser();
+
+const FEED_HEADERS = {
+  Accept: "application/rss+xml, application/xml, text/xml, */*",
+  "User-Agent":
+    "Mozilla/5.0 (compatible; AI-News-Bot/1.0; +https://github.com/news-bot)",
+};
 
 /** HTML sahifa kelib qolsa aniq xato beradi */
 async function parseFeed(feedUrl: string) {
   const res = await fetch(feedUrl, {
-    headers: {
-      Accept: "application/rss+xml, application/xml, text/xml, */*",
-      "User-Agent":
-        "Mozilla/5.0 (compatible; AI-News-Bot/1.0; +https://github.com/news-bot)",
-    },
+    headers: FEED_HEADERS,
     signal: AbortSignal.timeout(15_000),
   });
 
@@ -42,33 +44,6 @@ async function parseFeed(feedUrl: string) {
   return parser.parseString(xml);
 }
 
-export const RSS_FEEDS = [
-  {
-    name: "TechCrunch",
-    url: "https://techcrunch.com/feed/",
-  },
-  {
-    name: "The Verge",
-    url: "https://www.theverge.com/rss/index.xml",
-  },
-  {
-    name: "Wired",
-    url: "https://www.wired.com/feed/rss",
-  },
-  {
-    name: "Hacker News",
-    url: "https://hnrss.org/frontpage",
-  },
-  {
-    name: "MIT Technology Review",
-    url: "https://www.technologyreview.com/feed/",
-  },
-  {
-    name: "The Next Web",
-    url: "https://thenextweb.com/feed",
-  },
-] as const;
-
 type FeedItem = {
   title?: string;
   link?: string;
@@ -83,45 +58,38 @@ type FeedItem = {
 function resolveSourceUrl(item: FeedItem): string | null {
   const url = (item.link || item.guid || "").trim();
   if (!url) return null;
-  try {
-    return normalizeSourceUrl(new URL(url).href);
-  } catch {
-    return normalizeSourceUrl(url);
-  }
+  return sanitizeSourceUrl(url);
 }
 
 function itemContent(item: FeedItem): string {
-  return (
-    item.contentSnippet ||
-    item.summary ||
-    item.content ||
-    item.title ||
-    ""
-  )
+  return (item.contentSnippet || item.summary || item.content || item.title || "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 async function processFeed(
-  feedName: string,
-  feedUrl: string,
+  source: SourceRow,
   maxPerFeed: number,
+  signal?: AbortSignal,
 ): Promise<number> {
   let added = 0;
+  let itemErrors = 0;
 
   try {
-    const feed = await parseFeed(feedUrl);
+    const feed = await parseFeed(source.url);
     const items = (feed.items as FeedItem[]).slice(0, maxPerFeed);
 
     for (const item of items) {
+      if (signal?.aborted) break;
+
       const sourceUrl = resolveSourceUrl(item);
       const title = (item.title || "").trim();
 
       if (!sourceUrl || !title) continue;
-      if (newsExists(sourceUrl)) continue;
+      if (isUrlBlocked(sourceUrl)) continue;
       if (similarTitleExists(title)) {
-        console.log(`[${feedName}] skip (o‘xshash sarlavha): ${title}`);
+        console.log(`[${source.name}] skip (o‘xshash sarlavha): ${title}`);
         continue;
       }
 
@@ -129,11 +97,7 @@ async function processFeed(
       if (!content) continue;
 
       try {
-        const processed = await processNews({
-          title,
-          content,
-          url: sourceUrl,
-        });
+        const processed = await processNews({ title, content, url: sourceUrl });
 
         insertNews({
           source_url: sourceUrl,
@@ -145,32 +109,85 @@ async function processFeed(
         });
 
         added += 1;
-        console.log(`[${feedName}] qo‘shildi: ${processed.title_uz}`);
+        console.log(`[${source.name}] qo‘shildi: ${processed.title_uz}`);
       } catch (err) {
-        console.error(`[${feedName}] AI/DB xato (${sourceUrl}):`, err);
+        itemErrors += 1;
+        console.error(`[${source.name}] AI/DB xato (${sourceUrl}):`, err);
       }
     }
+
+    // Feed o‘qildi, lekin hech narsa qo‘shilmadi va xatolar bo‘ldi —
+    // buni adminda ko‘rsatish kerak (odatda Gemini kvotasi/kaliti).
+    recordSourceResult(source.id, {
+      added,
+      ...(added === 0 && itemErrors > 0
+        ? { error: `Feed o‘qildi, lekin ${itemErrors} ta yangilikni AI qayta ishlay olmadi` }
+        : {}),
+    });
   } catch (err) {
-    console.error(`[${feedName}] feed o‘qish xatosi:`, err);
+    const message = err instanceof Error ? err.message : String(err);
+    recordSourceResult(source.id, { added, error: message });
+    console.error(`[${source.name}] feed o‘qish xatosi:`, err);
   }
 
   return added;
 }
 
+export type FetchProgress = {
+  totalSources: number;
+  doneSources: number;
+  currentSource: string | null;
+  added: number;
+};
+
+export type FetchOptions = {
+  maxPerFeed?: number;
+  onProgress?: (progress: FetchProgress) => void;
+  signal?: AbortSignal;
+};
+
 /**
- * Barcha RSS manbalaridan yangiliklarni yig‘adi, dedupe qiladi va Gemini orqali qayta ishlaydi.
- * Feedlar ketma-ket ishlanadi (free tier RPM limitini saqlash uchun).
+ * Aktiv RSS manbalaridan yangiliklarni yig‘adi, dedupe qiladi va Gemini
+ * orqali qayta ishlaydi. Manbalar ketma-ket ishlanadi (free tier RPM limiti).
  * @returns Yangi qo‘shilgan yangiliklar soni
  */
 export async function fetchAndProcessNews(
-  options: { maxPerFeed?: number } = {},
+  options: FetchOptions = {},
 ): Promise<number> {
   const maxPerFeed = options.maxPerFeed ?? 2;
-  console.log(`RSS yig‘ish boshlandi (har feeddan max ${maxPerFeed})...`);
+  const sources = listActiveSources();
+
+  if (sources.length === 0) {
+    console.warn("Aktiv RSS manbasi yo‘q — admin panelda qo‘shing");
+    return 0;
+  }
+
+  console.log(
+    `RSS yig‘ish boshlandi (${sources.length} manba, har biridan max ${maxPerFeed})...`,
+  );
 
   let total = 0;
-  for (const feed of RSS_FEEDS) {
-    total += await processFeed(feed.name, feed.url, maxPerFeed);
+  let done = 0;
+
+  const report = (currentSource: string | null) =>
+    options.onProgress?.({
+      totalSources: sources.length,
+      doneSources: done,
+      currentSource,
+      added: total,
+    });
+
+  report(sources[0]?.name ?? null);
+
+  for (const source of sources) {
+    if (options.signal?.aborted) {
+      console.log("Fetch bekor qilindi");
+      break;
+    }
+    report(source.name);
+    total += await processFeed(source, maxPerFeed, options.signal);
+    done += 1;
+    report(source.name);
   }
 
   console.log(`Jami yangi yangiliklar: ${total}`);

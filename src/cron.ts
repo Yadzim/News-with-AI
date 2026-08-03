@@ -5,7 +5,7 @@ startScheduleWatcher();
 
 if (process.argv.includes("--now")) {
   import("./pipeline.js")
-    .then(({ runPipeline }) => runPipeline())
+    .then(({ runGroupPipeline }) => runGroupPipeline())
     .catch((err) => {
       console.error(err);
       process.exit(1);

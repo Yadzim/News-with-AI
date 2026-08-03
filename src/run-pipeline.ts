@@ -1,6 +1,6 @@
-import { runPipeline } from "./pipeline.js";
+import { runGroupPipeline } from "./pipeline.js";
 
-runPipeline()
+runGroupPipeline()
   .then(({ fetched, published }) => {
     console.log(`Tayyor. Yangi: ${fetched}, post: ${published}`);
   })

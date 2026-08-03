@@ -19,7 +19,9 @@ Serverda asosan **2 ta jarayon** ishlaydi:
 - Gemini API key
 - Telegram bot token
 - Forum guruh ID (`-100...`, minus bilan)
-- Har kategoriya uchun `message_thread_id` (topic ID)
+- Har kategoriya uchun `message_thread_id` (topic ID) — keyinchalik admin
+  panelidan ham qo‘shsa bo‘ladi
+- Ovozli xabar (TTS) ishlatmoqchi bo‘lsangiz — `ffmpeg`
 
 ---
 
@@ -38,6 +40,16 @@ npm -v
 ```
 
 `better-sqlite3` native build uchun `build-essential` kerak.
+
+Ovozli xabar (TTS) ishlatmoqchi bo‘lsangiz `ffmpeg` ham kerak:
+
+```bash
+sudo apt install -y ffmpeg
+ffmpeg -version
+```
+
+`ffmpeg` bo‘lmasa loyiha baribir ishlaydi — shunchaki postlarga audio
+qo‘shilmaydi.
 
 ---
 
@@ -71,7 +83,16 @@ TOPIC_GENERAL_TECH=5
 
 DATABASE_PATH=./data/news.db
 PORT=8787
-ADMIN_TOKEN=kuchli_parol_bu_yerda
+
+# Admin panel himoyasi — kamida bittasi majburiy
+# Kalit yaratish: openssl rand -hex 32
+ADMIN_TOKEN=bu_yerga_openssl_rand_hex_32_natijasi
+# Mini App orqali kalitsiz kirish uchun (ixtiyoriy)
+ADMIN_USER_IDS=123456789
+
+# Ovozli xabar (ixtiyoriy)
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+TTS_VOICE=Kore
 
 # HTTPS domen (oxirida / bo‘lishi mumkin)
 WEBAPP_URL=https://news.example.com/
@@ -80,13 +101,30 @@ WEBAPP_URL=https://news.example.com/
 **Muhim:**
 
 - `TELEGRAM_GROUP_ID` oldida `-` bo‘lishi shart (`-100...`)
-- `ADMIN_TOKEN` ni bo‘sh qoldirmang (ochiq internetda)
+- `ADMIN_TOKEN` **kamida 24 belgi** bo‘lishi kerak. `ADMIN_TOKEN` ham,
+  `ADMIN_USER_IDS` ham bo‘sh bo‘lsa `news-admin` **ishga tushmaydi** —
+  bu admin API ni ochiq internetda himoyasiz qoldirmaslik uchun.
 - `WEBAPP_URL` HTTPS bo‘lishi kerak
+- `TOPIC_*` faqat birinchi ishga tushirishda ishlatiladi; keyin kategoriyalar
+  admin panelidan boshqariladi
 
 ```bash
 npm ci
+npm test
 mkdir -p data
 ```
+
+### Fayl egaligi
+
+`news-admin` va `news-bot` `www-data` nomidan ishlaydi, shuning uchun baza va
+audio katalogi shu foydalanuvchiga tegishli bo‘lishi kerak:
+
+```bash
+sudo mkdir -p /var/www/news-bot/data/audio
+sudo chown -R www-data:www-data /var/www/news-bot/data
+```
+
+Deploy `git reset --hard` qilganda `data/` tegilmaydi (u `.gitignore` da).
 
 ---
 
@@ -285,6 +323,9 @@ sudo ufw status
 | `chat not found` | `TELEGRAM_GROUP_ID=-100...`; bot guruhda admin; kerak bo‘lsa botni chiqarib qayta qo‘shing |
 | Mini App ochilmaydi | HTTPS, to‘g‘ri `WEBAPP_URL`, BotFather Menu Button |
 | API `401 Unauthorized` | Sozlamalarda `ADMIN_TOKEN` ni kiriting |
+| `news-admin` darhol o‘chadi | `.env` da `ADMIN_TOKEN` (min 24 belgi) yoki `ADMIN_USER_IDS` yo‘q — `journalctl -u news-admin -n 20` ga qarang |
+| Postda audio yo‘q | `ffmpeg -version` ni tekshiring; admin panelda TTS yoqilganmi |
+| `data/` ga yozib bo‘lmayapti | `sudo chown -R www-data:www-data /var/www/news-bot/data` |
 | Gemini `429` | Free tier limiti; biroz kutib qayta urining |
 | Gemini `404` model | `.env` da `GEMINI_MODEL=gemini-2.0-flash` yoki `gemini-3.1-flash-lite` |
 | `better-sqlite3` build xato | `build-essential` o‘rnating, keyin `npm ci` |

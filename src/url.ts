@@ -1,3 +1,17 @@
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+
+/**
+ * Faqat http/https ga ruxsat. `javascript:`, `data:` va boshqalar rad etiladi,
+ * shunda RSS dan kelgan zararli havola admin paneliga yoki postga tushmaydi.
+ */
+export function isHttpUrl(raw: string): boolean {
+  try {
+    return ALLOWED_PROTOCOLS.has(new URL(raw.trim()).protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 /** URL ni dedupe uchun bir xil shaklga keltirish (utm, www, trailing slash) */
 export function normalizeSourceUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -23,6 +37,36 @@ export function normalizeSourceUrl(raw: string): string {
   }
 }
 
+/** Normalizatsiya + sxema tekshiruvi. http/https bo‘lmasa `null`. */
+export function sanitizeSourceUrl(raw: string): string | null {
+  if (!isHttpUrl(raw)) return null;
+  const normalized = normalizeSourceUrl(raw);
+  return isHttpUrl(normalized) ? normalized : null;
+}
+
+/**
+ * Feed URL uchun yumshoq tozalash: sxema tekshiriladi, host kichik harfga
+ * o‘tadi, `#` fragment olib tashlanadi — lekin `www.` va oxirgi `/`
+ * saqlanadi, chunki ular feed manzilining bir qismi bo‘lishi mumkin.
+ */
+export function sanitizeFeedUrl(raw: string): string | null {
+  if (!isHttpUrl(raw)) return null;
+  try {
+    const u = new URL(raw.trim());
+    u.hash = "";
+    u.protocol = u.protocol.toLowerCase();
+    u.hostname = u.hostname.toLowerCase();
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+/** Ikki feed URL amalda bir xilmi (www / oxirgi slash / http-https farqisiz) */
+export function isSameFeed(a: string, b: string): boolean {
+  return normalizeSourceUrl(a) === normalizeSourceUrl(b);
+}
+
 const SITE_NAMES: Record<string, string> = {
   "techcrunch.com": "TechCrunch",
   "theverge.com": "The Verge",
@@ -31,6 +75,10 @@ const SITE_NAMES: Record<string, string> = {
   "hnrss.org": "Hacker News",
   "technologyreview.com": "MIT Tech Review",
   "thenextweb.com": "The Next Web",
+  "arstechnica.com": "Ars Technica",
+  "engadget.com": "Engadget",
+  "zdnet.com": "ZDNet",
+  "bleepingcomputer.com": "BleepingComputer",
 };
 
 export function siteNameFromUrl(url: string): string {

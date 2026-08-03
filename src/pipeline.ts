@@ -1,39 +1,44 @@
-import { Bot } from "grammy";
-import { config } from "./config.js";
 import "./db.js";
-import { fetchAndProcessNews } from "./fetcher.js";
+import { startFetch } from "./fetch-job.js";
 import {
   publishPendingToChannel,
   publishPendingToGroup,
 } from "./publisher.js";
+import { publisherBot } from "./telegram.js";
 
 const MAX_PER_FEED = 5;
 const PUBLISH_LIMIT = 50;
 
-export async function runFetchOnly(): Promise<number> {
+/**
+ * Fetch qulf ostida ishlaydi: admin paneldagi tugma bilan cron bir vaqtda
+ * tushib qolsa, ikkinchisi mavjud jarayonni kutadi (qayta yugurtirmaydi).
+ */
+export async function runFetchOnly(maxPerFeed = MAX_PER_FEED): Promise<number> {
   console.log(`[${new Date().toISOString()}] Fetch boshlandi`);
-  const added = await fetchAndProcessNews({ maxPerFeed: MAX_PER_FEED });
+  const { started, promise } = startFetch(maxPerFeed);
+  if (!started) {
+    console.log("Fetch allaqachon ishlayapti — mavjud jarayon kutilmoqda");
+  }
+  const added = await promise;
   console.log(`Fetch tugadi: yangi ${added}`);
   return added;
 }
 
 export async function runPublishGroup(): Promise<number> {
   console.log(`[${new Date().toISOString()}] Guruhga yuborish`);
-  const bot = new Bot(config.telegramBotToken);
-  const published = await publishPendingToGroup(bot, PUBLISH_LIMIT);
+  const published = await publishPendingToGroup(publisherBot, PUBLISH_LIMIT);
   console.log(`Guruhga yuborildi: ${published}`);
   return published;
 }
 
 export async function runPublishChannel(): Promise<number> {
   console.log(`[${new Date().toISOString()}] Kanalga yuborish`);
-  const bot = new Bot(config.telegramBotToken);
-  const published = await publishPendingToChannel(bot, PUBLISH_LIMIT);
+  const published = await publishPendingToChannel(publisherBot, PUBLISH_LIMIT);
   console.log(`Kanalga yuborildi: ${published}`);
   return published;
 }
 
-/** Guruh schedule: fetch + guruhga post */
+/** Guruh jadvali: fetch + guruhga post */
 export async function runGroupPipeline(): Promise<{
   fetched: number;
   published: number;
@@ -41,12 +46,4 @@ export async function runGroupPipeline(): Promise<{
   const fetched = await runFetchOnly();
   const published = await runPublishGroup();
   return { fetched, published };
-}
-
-/** @deprecated runGroupPipeline */
-export async function runPipeline(): Promise<{
-  fetched: number;
-  published: number;
-}> {
-  return runGroupPipeline();
 }

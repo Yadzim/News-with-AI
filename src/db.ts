@@ -3,8 +3,8 @@ import type BetterSqlite3 from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CATEGORIES, config, type Category } from "./config.js";
-import { normalizeSourceUrl } from "./url.js";
+import { SEED_CATEGORIES, config, type Category } from "./config.js";
+import { isSameFeed, normalizeSourceUrl, sanitizeFeedUrl } from "./url.js";
 
 export type NewsRow = {
   id: string;
@@ -16,6 +16,29 @@ export type NewsRow = {
   published_at: string | null;
   is_posted: number;
   is_posted_channel: number;
+  audio_path: string | null;
+  created_at: string;
+};
+
+export type CategoryRow = {
+  id: string;
+  name: string;
+  thread_id: number | null;
+  is_active: number;
+  sort_order: number;
+  created_at: string;
+};
+
+export type SourceRow = {
+  id: string;
+  name: string;
+  url: string;
+  is_active: number;
+  sort_order: number;
+  last_fetched_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  last_added: number;
   created_at: string;
 };
 
@@ -33,15 +56,12 @@ db.exec(`
     title_original TEXT,
     title_uz TEXT,
     summary_uz TEXT,
-    category TEXT CHECK(category IN ('AI','Hardware','Cybersecurity','Startups','General Tech')),
+    category TEXT,
     published_at TEXT,
-    is_posted INTEGER DEFAULT 0,
+    is_posted INTEGER NOT NULL DEFAULT 0,
+    is_posted_channel INTEGER NOT NULL DEFAULT 0,
+    audio_path TEXT,
     created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS topic_mappings (
-    category TEXT PRIMARY KEY,
-    thread_id INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -49,51 +69,548 @@ db.exec(`
     value TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    thread_id INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    last_fetched_at TEXT,
+    last_status TEXT,
+    last_error TEXT,
+    last_added INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS deleted_urls (
+    source_url TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+// ---------------------------------------------------------------------------
+// Settings (migratsiyalardan oldin kerak)
+// ---------------------------------------------------------------------------
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(key, value);
+}
+
+const insertSettingIfMissing = db.prepare(
+  "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+);
+
+// ---------------------------------------------------------------------------
+// Migratsiyalar
+// ---------------------------------------------------------------------------
+
+function addMissingNewsColumns(): void {
+  const cols = (
+    db.prepare("PRAGMA table_info(news)").all() as { name: string }[]
+  ).map((c) => c.name);
+
+  if (!cols.includes("is_posted_channel")) {
+    db.exec("ALTER TABLE news ADD COLUMN is_posted_channel INTEGER DEFAULT 0");
+  }
+  if (!cols.includes("audio_path")) {
+    db.exec("ALTER TABLE news ADD COLUMN audio_path TEXT");
+  }
+}
+
+/**
+ * Eski sxemada `category` ustunida qat’iy CHECK bor edi — dinamik
+ * kategoriyalar bilan u yangi nomlarni rad etadi. SQLite CHECK ni ALTER
+ * bilan olib tashlay olmagani uchun jadval qayta quriladi.
+ */
+function dropCategoryCheckConstraint(): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='news'")
+    .get() as { sql: string | null } | undefined;
+
+  if (!row?.sql || !/CHECK\s*\(\s*category/i.test(row.sql)) return;
+
+  console.log("Migratsiya: news.category CHECK constrainti olib tashlanmoqda...");
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE news_migrated (
+        id TEXT PRIMARY KEY,
+        source_url TEXT UNIQUE NOT NULL,
+        title_original TEXT,
+        title_uz TEXT,
+        summary_uz TEXT,
+        category TEXT,
+        published_at TEXT,
+        is_posted INTEGER NOT NULL DEFAULT 0,
+        is_posted_channel INTEGER NOT NULL DEFAULT 0,
+        audio_path TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO news_migrated (
+        id, source_url, title_original, title_uz, summary_uz, category,
+        published_at, is_posted, is_posted_channel, audio_path, created_at
+      )
+      SELECT
+        id, source_url, title_original, title_uz, summary_uz, category,
+        published_at, COALESCE(is_posted, 0), COALESCE(is_posted_channel, 0),
+        audio_path, created_at
+      FROM news;
+      DROP TABLE news;
+      ALTER TABLE news_migrated RENAME TO news;
+      COMMIT;
+    `);
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* tranzaksiya allaqachon yopilgan */
+    }
+    throw err;
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+export const DEFAULT_SOURCES: { name: string; url: string }[] = [
+  { name: "TechCrunch", url: "https://techcrunch.com/feed/" },
+  { name: "The Verge", url: "https://www.theverge.com/rss/index.xml" },
+  { name: "Wired", url: "https://www.wired.com/feed/rss" },
+  { name: "Hacker News", url: "https://hnrss.org/frontpage" },
+  {
+    name: "MIT Technology Review",
+    url: "https://www.technologyreview.com/feed/",
+  },
+  { name: "The Next Web", url: "https://thenextweb.com/feed" },
+];
+
+function seedCategories(): void {
+  const count = (
+    db.prepare("SELECT COUNT(*) AS c FROM categories").get() as { c: number }
+  ).c;
+  if (count > 0) return;
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO categories (id, name, thread_id, is_active, sort_order)
+     VALUES (?, ?, ?, 1, ?)`,
+  );
+
+  // Eski `topic_mappings` jadvali bo‘lsa — undan ko‘chiramiz
+  const legacy = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='topic_mappings'",
+    )
+    .get() as { name: string } | undefined;
+
+  if (legacy) {
+    const rows = db
+      .prepare("SELECT category, thread_id FROM topic_mappings")
+      .all() as { category: string; thread_id: number }[];
+    rows.forEach((row, i) => insert.run(randomUUID(), row.category, row.thread_id, i));
+    if (rows.length) {
+      console.log(
+        `Migratsiya: ${rows.length} kategoriya topic_mappings dan ko‘chirildi`,
+      );
+    }
+  }
+
+  SEED_CATEGORIES.forEach((seed, i) =>
+    insert.run(randomUUID(), seed.name, seed.threadId ?? null, i),
+  );
+
+  // Bazada bor, lekin ro‘yxatga tushmagan kategoriyalar yo‘qolmasin
+  const orphans = db
+    .prepare(
+      `SELECT DISTINCT category FROM news
+       WHERE category IS NOT NULL
+         AND category NOT IN (SELECT name FROM categories)`,
+    )
+    .all() as { category: string }[];
+  orphans.forEach((row, i) =>
+    insert.run(randomUUID(), row.category, null, SEED_CATEGORIES.length + i),
+  );
+}
+
+function seedSources(): void {
+  const count = (
+    db.prepare("SELECT COUNT(*) AS c FROM sources").get() as { c: number }
+  ).c;
+  if (count > 0) return;
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO sources (id, name, url, is_active, sort_order)
+     VALUES (?, ?, ?, 1, ?)`,
+  );
+  DEFAULT_SOURCES.forEach((source, i) =>
+    insert.run(randomUUID(), source.name, source.url, i),
+  );
+}
+
+function migrateSettings(): void {
+  const legacyKeys = [
+    ["schedule_morning", "schedule_group_morning"],
+    ["schedule_evening", "schedule_group_evening"],
+    ["schedule_enabled", "schedule_group_enabled"],
+  ] as const;
+
+  for (const [from, to] of legacyKeys) {
+    const value = getSetting(from);
+    if (value && !getSetting(to)) setSetting(to, value);
+  }
+
+  const defaults: Record<string, string> = {
+    schedule_group_morning: "08:00",
+    schedule_group_evening: "20:00",
+    schedule_group_enabled: "1",
+    schedule_channel_morning: "09:00",
+    schedule_channel_evening: "21:00",
+    schedule_channel_enabled: "1",
+    tts_enabled: "0",
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    insertSettingIfMissing.run(key, value);
+  }
+}
+
+addMissingNewsColumns();
+dropCategoryCheckConstraint();
+seedCategories();
+seedSources();
+migrateSettings();
+
+// CHECK migratsiyasi jadvalni qayta qurgani uchun indekslar shundan keyin
+db.exec(`
   CREATE INDEX IF NOT EXISTS idx_news_category_created
     ON news(category, created_at DESC);
-
   CREATE INDEX IF NOT EXISTS idx_news_is_posted
     ON news(is_posted, created_at ASC);
+  CREATE INDEX IF NOT EXISTS idx_news_is_posted_channel
+    ON news(is_posted_channel, created_at ASC);
 `);
 
-const upsertTopic = db.prepare(`
-  INSERT INTO topic_mappings (category, thread_id)
-  VALUES (@category, @thread_id)
-  ON CONFLICT(category) DO UPDATE SET thread_id = excluded.thread_id
-`);
+// Ma’lumot `categories` ga ko‘chirildi — eski jadval endi kerak emas
+db.exec("DROP TABLE IF EXISTS topic_mappings");
 
-for (const category of CATEGORIES) {
-  upsertTopic.run({ category, thread_id: config.topics[category] });
+// ---------------------------------------------------------------------------
+// TTS sozlamasi
+// ---------------------------------------------------------------------------
+
+export function isTtsEnabled(): boolean {
+  return getSetting("tts_enabled") === "1";
 }
 
-const DEFAULT_SETTINGS: Record<string, string> = {
-  schedule_morning: "08:00",
-  schedule_evening: "20:00",
-  schedule_enabled: "1",
+export function setTtsEnabled(enabled: boolean): void {
+  setSetting("tts_enabled", enabled ? "1" : "0");
+}
+
+// ---------------------------------------------------------------------------
+// Kategoriyalar
+// ---------------------------------------------------------------------------
+
+export function listCategories(includeInactive = true): CategoryRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM categories
+       ${includeInactive ? "" : "WHERE is_active = 1"}
+       ORDER BY sort_order ASC, name ASC`,
+    )
+    .all() as CategoryRow[];
+}
+
+export function listActiveCategories(): CategoryRow[] {
+  return listCategories(false);
+}
+
+export function listActiveCategoryNames(): string[] {
+  return listActiveCategories().map((c) => c.name);
+}
+
+export function getCategoryByName(name: string): CategoryRow | undefined {
+  return db
+    .prepare("SELECT * FROM categories WHERE name = ? COLLATE NOCASE")
+    .get(name.trim()) as CategoryRow | undefined;
+}
+
+export function getCategoryById(id: string): CategoryRow | undefined {
+  return db.prepare("SELECT * FROM categories WHERE id = ?").get(id) as
+    | CategoryRow
+    | undefined;
+}
+
+/** Guruh topic’i (`message_thread_id`). Biriktirilmagan bo‘lsa `null`. */
+export function getThreadId(name: string): number | null {
+  return getCategoryByName(name)?.thread_id ?? null;
+}
+
+export function getCategoryByThreadId(
+  threadId: number,
+): CategoryRow | undefined {
+  return db
+    .prepare("SELECT * FROM categories WHERE thread_id = ? AND is_active = 1")
+    .get(threadId) as CategoryRow | undefined;
+}
+
+export type CategoryInput = {
+  name: string;
+  thread_id?: number | null;
+  is_active?: boolean;
+  sort_order?: number;
 };
 
-const insertSettingIfMissing = db.prepare(`
-  INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
-`);
+export function createCategory(input: CategoryInput): CategoryRow {
+  const name = input.name.trim();
+  if (!name) throw new Error("Kategoriya nomi bo‘sh bo‘lmasligi kerak");
+  if (getCategoryByName(name)) {
+    throw new Error(`"${name}" kategoriyasi allaqachon mavjud`);
+  }
 
-for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-  insertSettingIfMissing.run(key, value);
+  const maxOrder = (
+    db
+      .prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM categories")
+      .get() as { m: number }
+  ).m;
+
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO categories (id, name, thread_id, is_active, sort_order)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    name,
+    input.thread_id ?? null,
+    input.is_active === false ? 0 : 1,
+    input.sort_order ?? maxOrder + 1,
+  );
+
+  return getCategoryById(id)!;
 }
 
-// Migratsiya: kanal ustuni
-const newsCols = db
-  .prepare("PRAGMA table_info(news)")
-  .all() as { name: string }[];
-if (!newsCols.some((c) => c.name === "is_posted_channel")) {
-  db.exec(`ALTER TABLE news ADD COLUMN is_posted_channel INTEGER DEFAULT 0`);
+export function updateCategory(
+  id: string,
+  input: Partial<CategoryInput>,
+): CategoryRow | undefined {
+  const current = getCategoryById(id);
+  if (!current) return undefined;
+
+  const name = input.name?.trim() || current.name;
+  if (name.toLowerCase() !== current.name.toLowerCase()) {
+    const clash = getCategoryByName(name);
+    if (clash && clash.id !== id) {
+      throw new Error(`"${name}" kategoriyasi allaqachon mavjud`);
+    }
+  }
+
+  db.prepare(
+    `UPDATE categories
+     SET name = ?, thread_id = ?, is_active = ?, sort_order = ?
+     WHERE id = ?`,
+  ).run(
+    name,
+    input.thread_id === undefined ? current.thread_id : input.thread_id,
+    input.is_active === undefined ? current.is_active : input.is_active ? 1 : 0,
+    input.sort_order ?? current.sort_order,
+    id,
+  );
+
+  // Nom o‘zgarsa mavjud yangiliklar ham yangi nomga ko‘chadi
+  if (name !== current.name) {
+    db.prepare("UPDATE news SET category = ? WHERE category = ?").run(
+      name,
+      current.name,
+    );
+  }
+
+  return getCategoryById(id);
 }
+
+export function deleteCategory(id: string): boolean {
+  return db.prepare("DELETE FROM categories WHERE id = ?").run(id).changes > 0;
+}
+
+/**
+ * AI qaytargan nomni mavjud aktiv kategoriyaga moslashtiradi.
+ * Mos kelmasa — "General Tech", u ham bo‘lmasa birinchi aktiv kategoriya.
+ */
+export function resolveCategoryName(raw: string): string | null {
+  const active = listActiveCategoryNames();
+  if (active.length === 0) return null;
+
+  const needle = raw.trim().toLowerCase();
+  const exact = active.find((name) => name.toLowerCase() === needle);
+  if (exact) return exact;
+
+  const collapsed = needle.replace(/\s+/g, "");
+  const loose = active.find(
+    (name) => name.toLowerCase().replace(/\s+/g, "") === collapsed,
+  );
+  if (loose) return loose;
+
+  return active.find((name) => name === "General Tech") ?? active[0]!;
+}
+
+// ---------------------------------------------------------------------------
+// Manbalar (RSS)
+// ---------------------------------------------------------------------------
+
+export function listSources(includeInactive = true): SourceRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM sources
+       ${includeInactive ? "" : "WHERE is_active = 1"}
+       ORDER BY sort_order ASC, name ASC`,
+    )
+    .all() as SourceRow[];
+}
+
+export function listActiveSources(): SourceRow[] {
+  return listSources(false);
+}
+
+export function getSourceById(id: string): SourceRow | undefined {
+  return db.prepare("SELECT * FROM sources WHERE id = ?").get(id) as
+    | SourceRow
+    | undefined;
+}
+
+export type SourceInput = {
+  name: string;
+  url: string;
+  is_active?: boolean;
+  sort_order?: number;
+};
+
+/** `www.` / oxirgi slash farqi bilan ham bir xil feed ikki marta qo‘shilmasin */
+function findSourceByFeed(url: string, exceptId?: string): SourceRow | undefined {
+  return listSources(true).find(
+    (source) => source.id !== exceptId && isSameFeed(source.url, url),
+  );
+}
+
+export function createSource(input: SourceInput): SourceRow {
+  const name = input.name.trim();
+  const url = sanitizeFeedUrl(input.url);
+  if (!name) throw new Error("Manba nomi bo‘sh bo‘lmasligi kerak");
+  if (!url) throw new Error("URL http yoki https bo‘lishi kerak");
+
+  if (findSourceByFeed(url)) {
+    throw new Error("Bu URL allaqachon qo‘shilgan");
+  }
+
+  const maxOrder = (
+    db.prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM sources").get() as {
+      m: number;
+    }
+  ).m;
+
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO sources (id, name, url, is_active, sort_order)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    name,
+    url,
+    input.is_active === false ? 0 : 1,
+    input.sort_order ?? maxOrder + 1,
+  );
+
+  return getSourceById(id)!;
+}
+
+export function updateSource(
+  id: string,
+  input: Partial<SourceInput>,
+): SourceRow | undefined {
+  const current = getSourceById(id);
+  if (!current) return undefined;
+
+  let url = current.url;
+  if (input.url !== undefined) {
+    const sanitized = sanitizeFeedUrl(input.url);
+    if (!sanitized) throw new Error("URL http yoki https bo‘lishi kerak");
+    if (findSourceByFeed(sanitized, id)) {
+      throw new Error("Bu URL allaqachon qo‘shilgan");
+    }
+    url = sanitized;
+  }
+
+  db.prepare(
+    "UPDATE sources SET name = ?, url = ?, is_active = ?, sort_order = ? WHERE id = ?",
+  ).run(
+    input.name?.trim() || current.name,
+    url,
+    input.is_active === undefined ? current.is_active : input.is_active ? 1 : 0,
+    input.sort_order ?? current.sort_order,
+    id,
+  );
+
+  return getSourceById(id);
+}
+
+export function deleteSource(id: string): boolean {
+  return db.prepare("DELETE FROM sources WHERE id = ?").run(id).changes > 0;
+}
+
+export function recordSourceResult(
+  id: string,
+  result: { added: number; error?: string },
+): void {
+  db.prepare(
+    `UPDATE sources
+     SET last_fetched_at = datetime('now'),
+         last_status = ?,
+         last_error = ?,
+         last_added = ?
+     WHERE id = ?`,
+  ).run(result.error ? "error" : "ok", result.error ?? null, result.added, id);
+}
+
+// ---------------------------------------------------------------------------
+// Yangiliklar
+// ---------------------------------------------------------------------------
 
 export function newsExists(sourceUrl: string): boolean {
-  const normalized = normalizeSourceUrl(sourceUrl);
   const row = db
     .prepare("SELECT 1 AS ok FROM news WHERE source_url = ?")
-    .get(normalized) as { ok: number } | undefined;
+    .get(normalizeSourceUrl(sourceUrl)) as { ok: number } | undefined;
   return Boolean(row);
+}
+
+export function rememberDeletedUrl(sourceUrl: string): void {
+  db.prepare("INSERT OR IGNORE INTO deleted_urls (source_url) VALUES (?)").run(
+    normalizeSourceUrl(sourceUrl),
+  );
+}
+
+export function isUrlDeleted(sourceUrl: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS ok FROM deleted_urls WHERE source_url = ?")
+    .get(normalizeSourceUrl(sourceUrl)) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
+/** Qayta olib kelmaslik kerak: allaqachon bor yoki qo‘lda o‘chirilgan */
+export function isUrlBlocked(sourceUrl: string): boolean {
+  return newsExists(sourceUrl) || isUrlDeleted(sourceUrl);
 }
 
 export type InsertNewsInput = {
@@ -125,6 +642,10 @@ export function getNewsById(id: string): NewsRow | undefined {
     | undefined;
 }
 
+export function setNewsAudioPath(id: string, path: string | null): void {
+  db.prepare("UPDATE news SET audio_path = ? WHERE id = ?").run(path, id);
+}
+
 export function getPendingNewsForGroup(limit = 20): NewsRow[] {
   return db
     .prepare(
@@ -153,43 +674,22 @@ export function getPendingNewsForChannel(limit = 20): NewsRow[] {
     .all(limit) as NewsRow[];
 }
 
-/** @deprecated getPendingNewsForGroup ishlating */
-export function getPendingNews(limit = 20): NewsRow[] {
-  return getPendingNewsForGroup(limit);
-}
-
-export function markNewsPostedToGroup(id: string): void {
-  db.prepare("UPDATE news SET is_posted = 1 WHERE id = ?").run(id);
-}
-
-export function markNewsPostedToChannel(id: string): void {
-  db.prepare("UPDATE news SET is_posted_channel = 1 WHERE id = ?").run(id);
-}
-
-/** @deprecated */
-export function markNewsPosted(id: string): void {
-  markNewsPostedToGroup(id);
-}
-
 export function claimNewsForGroupPosting(id: string): boolean {
-  const result = db
-    .prepare("UPDATE news SET is_posted = 1 WHERE id = ? AND is_posted = 0")
-    .run(id);
-  return result.changes === 1;
+  return (
+    db
+      .prepare("UPDATE news SET is_posted = 1 WHERE id = ? AND is_posted = 0")
+      .run(id).changes === 1
+  );
 }
 
 export function claimNewsForChannelPosting(id: string): boolean {
-  const result = db
-    .prepare(
-      "UPDATE news SET is_posted_channel = 1 WHERE id = ? AND is_posted_channel = 0",
-    )
-    .run(id);
-  return result.changes === 1;
-}
-
-/** @deprecated */
-export function claimNewsForPosting(id: string): boolean {
-  return claimNewsForGroupPosting(id);
+  return (
+    db
+      .prepare(
+        "UPDATE news SET is_posted_channel = 1 WHERE id = ? AND is_posted_channel = 0",
+      )
+      .run(id).changes === 1
+  );
 }
 
 export function unclaimGroupNews(id: string): void {
@@ -199,22 +699,39 @@ export function unclaimGroupNews(id: string): void {
 }
 
 export function unclaimChannelNews(id: string): void {
-  db
-    .prepare(
-      "UPDATE news SET is_posted_channel = 0 WHERE id = ? AND is_posted_channel = 1",
-    )
-    .run(id);
+  db.prepare(
+    "UPDATE news SET is_posted_channel = 0 WHERE id = ? AND is_posted_channel = 1",
+  ).run(id);
 }
 
-/** @deprecated */
-export function unclaimNews(id: string): void {
-  unclaimGroupNews(id);
+/** Sarlavhani taqqoslash uchun ma’noli so‘zlar to‘plami */
+export function titleTokens(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2),
+  );
 }
 
-/** Bir xil sarlavha (taxminan) allaqachon bor-yo‘qligi */
+export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+  return intersection / (a.size + b.size - intersection);
+}
+
+export const SIMILARITY_THRESHOLD = 0.85;
+
+/** So‘nggi 14 kunda shu sarlavhaga juda yaqin yangilik bormi */
 export function similarTitleExists(title: string): boolean {
   const normalized = title.trim().toLowerCase().replace(/\s+/g, " ");
   if (normalized.length < 12) return false;
+
+  const tokens = titleTokens(title);
 
   const rows = db
     .prepare(
@@ -226,10 +743,14 @@ export function similarTitleExists(title: string): boolean {
     .all() as { title_original: string | null; title_uz: string | null }[];
 
   for (const row of rows) {
-    for (const t of [row.title_original, row.title_uz]) {
-      if (!t) continue;
-      const other = t.trim().toLowerCase().replace(/\s+/g, " ");
-      if (other === normalized) return true;
+    for (const other of [row.title_original, row.title_uz]) {
+      if (!other) continue;
+      if (other.trim().toLowerCase().replace(/\s+/g, " ") === normalized) {
+        return true;
+      }
+      if (jaccardSimilarity(tokens, titleTokens(other)) >= SIMILARITY_THRESHOLD) {
+        return true;
+      }
     }
   }
   return false;
@@ -252,43 +773,9 @@ export function getNewsByCategory(
     .all(category, limit, offset) as NewsRow[];
 }
 
-export function getThreadId(category: Category): number {
-  const row = db
-    .prepare("SELECT thread_id FROM topic_mappings WHERE category = ?")
-    .get(category) as { thread_id: number } | undefined;
-
-  if (!row) {
-    throw new Error(`Topic mapping topilmadi: ${category}`);
-  }
-
-  return row.thread_id;
-}
-
-export function getCategoryByThreadId(threadId: number): Category | null {
-  const row = db
-    .prepare("SELECT category FROM topic_mappings WHERE thread_id = ?")
-    .get(threadId) as { category: string } | undefined;
-
-  if (!row || !(CATEGORIES as readonly string[]).includes(row.category)) {
-    return null;
-  }
-
-  return row.category as Category;
-}
-
-export function getSetting(key: string): string | null {
-  const row = db
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(key) as { value: string } | undefined;
-  return row?.value ?? null;
-}
-
-export function setSetting(key: string, value: string): void {
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-  ).run(key, value);
-}
+// ---------------------------------------------------------------------------
+// Jadval (schedule)
+// ---------------------------------------------------------------------------
 
 export type ScheduleSettings = {
   morning: string;
@@ -310,15 +797,7 @@ function readSchedule(prefix: "group" | "channel"): ScheduleSettings {
 }
 
 export function getTargetScheduleSettings(): TargetScheduleSettings {
-  return {
-    group: readSchedule("group"),
-    channel: readSchedule("channel"),
-  };
-}
-
-/** @deprecated getTargetScheduleSettings().group */
-export function getScheduleSettings(): ScheduleSettings {
-  return readSchedule("group");
+  return { group: readSchedule("group"), channel: readSchedule("channel") };
 }
 
 export function saveTargetSchedule(
@@ -331,53 +810,33 @@ export function saveTargetSchedule(
   return readSchedule(target);
 }
 
-/** @deprecated saveTargetSchedule('group', ...) */
-export function saveScheduleSettings(input: ScheduleSettings): ScheduleSettings {
-  return saveTargetSchedule("group", input);
-}
+// ---------------------------------------------------------------------------
+// Ro‘yxat / statistika
+// ---------------------------------------------------------------------------
 
-function migrateScheduleSettings(): void {
-  const legacyMorning = getSetting("schedule_morning");
-  const legacyEvening = getSetting("schedule_evening");
-  const legacyEnabled = getSetting("schedule_enabled");
-  if (legacyMorning && !getSetting("schedule_group_morning")) {
-    setSetting("schedule_group_morning", legacyMorning);
-  }
-  if (legacyEvening && !getSetting("schedule_group_evening")) {
-    setSetting("schedule_group_evening", legacyEvening);
-  }
-  if (legacyEnabled && !getSetting("schedule_group_enabled")) {
-    setSetting("schedule_group_enabled", legacyEnabled);
-  }
+export const POSTED_FILTERS = [
+  "all",
+  "group_yes",
+  "group_no",
+  "channel_yes",
+  "channel_no",
+] as const;
 
-  const defaults: Record<string, string> = {
-    schedule_group_morning: "08:00",
-    schedule_group_evening: "20:00",
-    schedule_group_enabled: "1",
-    schedule_channel_morning: "09:00",
-    schedule_channel_evening: "21:00",
-    schedule_channel_enabled: "1",
-  };
-  for (const [key, value] of Object.entries(defaults)) {
-    insertSettingIfMissing.run(key, value);
-  }
-}
-
-migrateScheduleSettings();
+export type PostedFilter = (typeof POSTED_FILTERS)[number];
 
 export type ListNewsFilters = {
   category?: Category | "all";
-  posted?:
-    | "all"
-    | "yes"
-    | "no"
-    | "group_yes"
-    | "group_no"
-    | "channel_yes"
-    | "channel_no";
+  posted?: PostedFilter;
   q?: string;
   page?: number;
   limit?: number;
+};
+
+const POSTED_CLAUSES: Record<Exclude<PostedFilter, "all">, string> = {
+  group_yes: "is_posted = 1",
+  group_no: "is_posted = 0",
+  channel_yes: "is_posted_channel = 1",
+  channel_no: "is_posted_channel = 0",
 };
 
 export function listNews(filters: ListNewsFilters = {}): {
@@ -398,18 +857,8 @@ export function listNews(filters: ListNewsFilters = {}): {
     params.push(filters.category);
   }
 
-  if (filters.posted === "yes") {
-    where.push("is_posted = 1");
-  } else if (filters.posted === "no") {
-    where.push("is_posted = 0");
-  } else if (filters.posted === "channel_yes") {
-    where.push("is_posted_channel = 1");
-  } else if (filters.posted === "channel_no") {
-    where.push("is_posted_channel = 0");
-  } else if (filters.posted === "group_yes") {
-    where.push("is_posted = 1");
-  } else if (filters.posted === "group_no") {
-    where.push("is_posted = 0");
+  if (filters.posted && filters.posted !== "all") {
+    where.push(POSTED_CLAUSES[filters.posted]);
   }
 
   if (filters.q?.trim()) {
@@ -439,55 +888,43 @@ export function listNews(filters: ListNewsFilters = {}): {
 
 export function getNewsStats(): {
   total: number;
-  pending: number;
-  posted: number;
   pendingGroup: number;
   postedGroup: number;
   pendingChannel: number;
   postedChannel: number;
   byCategory: { category: string; count: number }[];
 } {
-  const total = (db.prepare("SELECT COUNT(*) AS c FROM news").get() as { c: number }).c;
-  const pendingGroup = (
-    db.prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted = 0").get() as {
-      c: number;
-    }
-  ).c;
-  const postedGroup = (
-    db.prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted = 1").get() as {
-      c: number;
-    }
-  ).c;
-  const pendingChannel = (
-    db
-      .prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 0")
-      .get() as { c: number }
-  ).c;
-  const postedChannel = (
-    db
-      .prepare("SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 1")
-      .get() as { c: number }
-  ).c;
-  const byCategory = db
-    .prepare(
-      `SELECT COALESCE(category, 'Unknown') AS category, COUNT(*) AS count
-       FROM news GROUP BY category ORDER BY count DESC`,
-    )
-    .all() as { category: string; count: number }[];
+  const one = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
 
   return {
-    total,
-    pending: pendingGroup,
-    posted: postedGroup,
-    pendingGroup,
-    postedGroup,
-    pendingChannel,
-    postedChannel,
-    byCategory,
+    total: one("SELECT COUNT(*) AS c FROM news"),
+    pendingGroup: one("SELECT COUNT(*) AS c FROM news WHERE is_posted = 0"),
+    postedGroup: one("SELECT COUNT(*) AS c FROM news WHERE is_posted = 1"),
+    pendingChannel: one(
+      "SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 0",
+    ),
+    postedChannel: one(
+      "SELECT COUNT(*) AS c FROM news WHERE is_posted_channel = 1",
+    ),
+    byCategory: db
+      .prepare(
+        `SELECT COALESCE(category, 'Unknown') AS category, COUNT(*) AS count
+         FROM news GROUP BY category ORDER BY count DESC`,
+      )
+      .all() as { category: string; count: number }[],
   };
 }
 
-export function deleteNews(id: string): boolean {
-  const result = db.prepare("DELETE FROM news WHERE id = ?").run(id);
-  return result.changes > 0;
+/**
+ * O‘chirilgan URL `deleted_urls` ga yoziladi — keyingi fetch uni qaytadan
+ * olib kelmaydi va qayta post qilmaydi.
+ * @returns o‘chirilgan qator (audio faylini tozalash uchun) yoki `undefined`
+ */
+export function deleteNews(id: string): NewsRow | undefined {
+  const row = getNewsById(id);
+  if (!row) return undefined;
+
+  rememberDeletedUrl(row.source_url);
+  db.prepare("DELETE FROM news WHERE id = ?").run(id);
+  return row;
 }
