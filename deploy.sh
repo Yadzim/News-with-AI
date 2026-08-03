@@ -28,14 +28,23 @@ fi
 SUDO=(sudo -n)
 
 restart_count() {
-  systemctl show -p NRestarts --value "$1" 2>/dev/null || echo 0
+  local value
+  value="$(systemctl show -p NRestarts --value "$1" 2>/dev/null || true)"
+  # Raqam bo‘lmasa (eski systemd, xizmat yo‘q) 0 deb hisoblaymiz
+  [[ "$value" =~ ^[0-9]+$ ]] && echo "$value" || echo 0
 }
 
 dump_failure() {
   local svc="$1"
-  "${SUDO[@]}" systemctl --no-pager -l status "$svc" || true
+  # `status -n 40` jurnalning oxirgi 40 qatorini ham ko‘rsatadi
+  "${SUDO[@]}" systemctl --no-pager -l -n 40 status "$svc" || true
+
+  # sudoers'da odatda faqat systemctl NOPASSWD bo‘ladi, shuning uchun
+  # journalctl'ni avval sudosiz, keyin sudo bilan sinaymiz
   echo "--- journalctl -u $svc -n 40 ---"
-  "${SUDO[@]}" journalctl -u "$svc" -n 40 --no-pager || true
+  journalctl -u "$svc" -n 40 --no-pager 2>/dev/null ||
+    "${SUDO[@]}" journalctl -u "$svc" -n 40 --no-pager 2>/dev/null ||
+    echo "(journalctl o‘qib bo‘lmadi — serverda: sudo journalctl -u $svc -n 40)"
 }
 
 restart_svc() {
@@ -52,24 +61,30 @@ restart_svc() {
     sleep 1
   fi
 
+  "${SUDO[@]}" systemctl start "$svc"
+
+  # NRestarts stop/start'da nolga qaytadi, shuning uchun bazani start'dan
+  # KEYIN olamiz — aks holda eski qayta ishga tushishlar hisobi (masalan 75)
+  # sog‘lom deploy'ni ham yiqitardi
+  sleep 1
   local restarts_before
   restarts_before="$(restart_count "$svc")"
 
-  "${SUDO[@]}" systemctl start "$svc"
   sleep "$STARTUP_GRACE_SECONDS"
 
-  if ! systemctl is-active --quiet "$svc"; then
-    echo "ERROR: $svc ishga tushmadi"
+  local restarts_after
+  restarts_after="$(restart_count "$svc")"
+
+  # Restart=always tufayli yiqilgan xizmat ham qayta ko‘tarilib "active"
+  # ko‘rinishi mumkin — NRestarts o‘sgani crash-loop degani
+  if [[ "$restarts_after" -gt "$restarts_before" ]]; then
+    echo "ERROR: $svc qayta-qayta yiqilyapti (NRestarts: $restarts_before -> $restarts_after)"
     dump_failure "$svc"
     exit 1
   fi
 
-  # Restart=always tufayli yiqilgan xizmat ham qayta ko‘tarilib "active"
-  # bo‘lishi mumkin — NRestarts o‘sgani crash-loop degani
-  local restarts_after
-  restarts_after="$(restart_count "$svc")"
-  if [[ "$restarts_after" != "$restarts_before" ]]; then
-    echo "ERROR: $svc qayta-qayta yiqilyapti (NRestarts: $restarts_before -> $restarts_after)"
+  if ! systemctl is-active --quiet "$svc"; then
+    echo "ERROR: $svc ishga tushmadi"
     dump_failure "$svc"
     exit 1
   fi
