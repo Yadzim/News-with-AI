@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { uniqueModels } from "./gemini.js";
 
 /** Bo‘sh satrni "berilmagan" deb hisoblaydigan ixtiyoriy butun son */
 const optionalInt = z
@@ -29,7 +30,15 @@ const envSchema = z.object({
   ADMIN_TOKEN: z.string().optional().default(""),
   ADMIN_USER_IDS: z.string().optional().default(""),
   GEMINI_MODEL: z.string().default("gemini-3.1-flash-lite"),
+  // Birinchi modelning kvotasi tugasa shunga o‘tiladi
+  GEMINI_MODEL_FALLBACK: z.string().optional().default("gemini-2.0-flash"),
   GEMINI_TTS_MODEL: z.string().default("gemini-2.5-flash-preview-tts"),
+  GEMINI_TTS_MODEL_FALLBACK: z
+    .string()
+    .optional()
+    .default("gemini-2.5-pro-preview-tts"),
+  // Kvotasi tugagan model necha daqiqa chetlatib turilsin
+  GEMINI_COOLDOWN_MINUTES: z.coerce.number().int().min(1).default(30),
   TTS_VOICE: z.string().default("Kore"),
   WEBAPP_URL: z.union([z.string().url(), z.literal("")]).default(""),
 });
@@ -79,8 +88,17 @@ export const FALLBACK_CATEGORY = "General Tech";
 
 export const config = {
   geminiApiKey: parsed.data.GEMINI_API_KEY,
-  geminiModel: parsed.data.GEMINI_MODEL,
-  geminiTtsModel: parsed.data.GEMINI_TTS_MODEL,
+  /** Tahlil modellari — birinchisining kvotasi tugasa keyingisi ishlatiladi */
+  geminiModels: uniqueModels(
+    parsed.data.GEMINI_MODEL,
+    parsed.data.GEMINI_MODEL_FALLBACK,
+  ),
+  /** Ovoz sintezi modellari — xuddi shunday tartibda */
+  geminiTtsModels: uniqueModels(
+    parsed.data.GEMINI_TTS_MODEL,
+    parsed.data.GEMINI_TTS_MODEL_FALLBACK,
+  ),
+  geminiCooldownMs: parsed.data.GEMINI_COOLDOWN_MINUTES * 60_000,
   ttsVoice: parsed.data.TTS_VOICE,
   // .trim() muhim: initData imzosi aynan shu satrdan hisoblanadi, ortiqcha
   // bo‘shliq butun tekshiruvni buzadi

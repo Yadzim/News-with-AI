@@ -758,3 +758,43 @@ code {
   border-radius: 5px;
   padding: 0.05rem 0.28rem;
 }
+
+/* Jadval: ixtiyoriy sondagi vaqtlar */
+
+.time-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.time-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.time-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-add-time {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--line);
+  background: none;
+  color: var(--muted);
+  border-radius: 12px;
+  padding: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.limit-field {
+  grid-column: 1 / -1;
+}
+
+.badge.cluster {
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+  color: var(--accent-2);
+}

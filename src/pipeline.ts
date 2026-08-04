@@ -1,4 +1,4 @@
-import "./db.js";
+import { getTargetScheduleSettings } from "./db.js";
 import { startFetch } from "./fetch-job.js";
 import {
   publishPendingToChannel,
@@ -7,7 +7,6 @@ import {
 import { publisherBot } from "./telegram.js";
 
 const MAX_PER_FEED = 5;
-const PUBLISH_LIMIT = 50;
 
 /**
  * Fetch qulf ostida ishlaydi: admin paneldagi tugma bilan cron bir vaqtda
@@ -24,16 +23,19 @@ export async function runFetchOnly(maxPerFeed = MAX_PER_FEED): Promise<number> {
   return added;
 }
 
-export async function runPublishGroup(): Promise<number> {
-  console.log(`[${new Date().toISOString()}] Guruhga yuborish`);
-  const published = await publishPendingToGroup(publisherBot, PUBLISH_LIMIT);
+export async function runPublishGroup(limit?: number): Promise<number> {
+  const max = limit ?? getTargetScheduleSettings().group.limit;
+  console.log(`[${new Date().toISOString()}] Guruhga yuborish (max ${max})`);
+  const published = await publishPendingToGroup(publisherBot, max);
   console.log(`Guruhga yuborildi: ${published}`);
   return published;
 }
 
-export async function runPublishChannel(): Promise<number> {
-  console.log(`[${new Date().toISOString()}] Kanalga yuborish`);
-  const published = await publishPendingToChannel(publisherBot, PUBLISH_LIMIT);
+/** Kanalga har safar cheklangan sonda post ketadi (default 5) */
+export async function runPublishChannel(limit?: number): Promise<number> {
+  const max = limit ?? getTargetScheduleSettings().channel.limit;
+  console.log(`[${new Date().toISOString()}] Kanalga yuborish (max ${max})`);
+  const published = await publishPendingToChannel(publisherBot, max);
   console.log(`Kanalga yuborildi: ${published}`);
   return published;
 }

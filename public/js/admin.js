@@ -242,6 +242,10 @@ function renderNews(items) {
         ? `<span class="badge posted">Kanal ✓</span>`
         : `<span class="badge pending">Kanal</span>`;
       const audioBadge = item.audio_path ? `<span class="badge">🔊</span>` : "";
+      const clusterBadge =
+        item.cluster_size > 1
+          ? `<span class="badge cluster">${item.cluster_size} manba</span>`
+          : "";
       return `
         <article class="news-card" style="animation-delay:${i * 40}ms" data-id="${escapeAttr(item.id)}">
           <div class="news-card-top">
@@ -251,6 +255,7 @@ function renderNews(items) {
             ${groupBadge}
             ${channelBadge}
             ${audioBadge}
+            ${clusterBadge}
             <span class="badge cat">${escapeHtml(item.category || "—")}</span>
             <span class="badge">${escapeHtml(formatWhen(item.published_at || item.created_at))}</span>
           </div>
@@ -355,6 +360,51 @@ async function loadSources() {
 // Yuklash
 // ---------------------------------------------------------------------------
 
+function renderTimeList(containerId, times) {
+  const root = $(containerId);
+  root.innerHTML = (times.length ? times : ["08:00"])
+    .map(
+      (time) => `
+        <div class="time-row">
+          <input type="time" value="${escapeAttr(time)}" required />
+          <button type="button" class="icon-mini is-danger" data-remove-time>✕</button>
+        </div>`,
+    )
+    .join("");
+}
+
+function readTimeList(containerId) {
+  return [...$(containerId).querySelectorAll("input[type=time]")]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+}
+
+// Vaqt qo‘shish / o‘chirish — oxirgi qator qolishi shart
+document.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-add-time]");
+  if (add) {
+    const root = $(add.dataset.addTime);
+    root.insertAdjacentHTML(
+      "beforeend",
+      `<div class="time-row">
+         <input type="time" value="12:00" required />
+         <button type="button" class="icon-mini is-danger" data-remove-time>✕</button>
+       </div>`,
+    );
+    haptic("light");
+    return;
+  }
+
+  const remove = e.target.closest("[data-remove-time]");
+  if (remove) {
+    const list = remove.closest(".time-list");
+    if (list.querySelectorAll(".time-row").length > 1) {
+      remove.closest(".time-row").remove();
+      haptic("light");
+    }
+  }
+});
+
 async function loadMeta() {
   const meta = await api("/api/meta");
   state.categories = meta.categories || [];
@@ -365,13 +415,13 @@ async function loadMeta() {
   renderStats(meta.stats || {});
 
   const sg = meta.schedule?.group || {};
-  $("groupMorning").value = sg.morning || "08:00";
-  $("groupEvening").value = sg.evening || "20:00";
+  renderTimeList("groupTimes", sg.times || ["08:00", "20:00"]);
+  $("groupLimit").value = sg.limit ?? 50;
   $("groupEnabled").checked = Boolean(sg.enabled);
 
   const sc = meta.schedule?.channel || {};
-  $("channelMorning").value = sc.morning || "09:00";
-  $("channelEvening").value = sc.evening || "21:00";
+  renderTimeList("channelTimes", sc.times || ["08:00", "14:00", "20:00"]);
+  $("channelLimit").value = sc.limit ?? 5;
   $("channelEnabled").checked = Boolean(sc.enabled);
 
   $("ttsEnabled").checked = Boolean(meta.tts?.enabled);
@@ -671,15 +721,22 @@ $("btnPublishChannel").addEventListener(
 function bindScheduleForm(formId, path, fields, statusId) {
   $(formId).addEventListener("submit", async (e) => {
     e.preventDefault();
+    const times = readTimeList(fields.times);
+    if (times.length === 0) {
+      setStatus($(statusId), "Kamida bitta vaqt kerak", "err");
+      return;
+    }
+
     try {
       const data = await api(path, {
         method: "PUT",
         body: JSON.stringify({
-          morning: $(fields.morning).value,
-          evening: $(fields.evening).value,
+          times,
+          limit: Number($(fields.limit).value) || undefined,
           enabled: $(fields.enabled).checked,
         }),
       });
+      renderTimeList(fields.times, data.times || times);
       setStatus($(statusId), data.applied || "Saqlandi", "ok");
       haptic("light");
     } catch (err) {
@@ -691,14 +748,14 @@ function bindScheduleForm(formId, path, fields, statusId) {
 bindScheduleForm(
   "scheduleGroupForm",
   "/api/schedule/group",
-  { morning: "groupMorning", evening: "groupEvening", enabled: "groupEnabled" },
+  { times: "groupTimes", limit: "groupLimit", enabled: "groupEnabled" },
   "scheduleGroupStatus",
 );
 
 bindScheduleForm(
   "scheduleChannelForm",
   "/api/schedule/channel",
-  { morning: "channelMorning", evening: "channelEvening", enabled: "channelEnabled" },
+  { times: "channelTimes", limit: "channelLimit", enabled: "channelEnabled" },
   "scheduleChannelStatus",
 );
 

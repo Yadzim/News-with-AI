@@ -4,6 +4,17 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config.js";
 import { isTtsEnabled, setNewsAudioPath, type NewsRow } from "./db.js";
+import {
+  ModelPool,
+  isModelUnavailableError,
+  isRateLimitError,
+} from "./gemini.js";
+
+export const ttsModelPool = new ModelPool(
+  config.geminiTtsModels,
+  "TTS",
+  config.geminiCooldownMs,
+);
 
 export const AUDIO_DIR = resolve(dirname(config.databasePath), "audio");
 
@@ -91,7 +102,10 @@ export function sampleRateFromMimeType(mimeType: string | undefined): number {
   return Number.isInteger(rate) && rate > 0 ? rate : 24_000;
 }
 
-async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
+async function requestSpeechFrom(
+  model: string,
+  text: string,
+): Promise<PcmAudio> {
   const elapsed = Date.now() - lastTtsRequestAt;
   if (lastTtsRequestAt > 0 && elapsed < MIN_TTS_INTERVAL_MS) {
     await sleep(MIN_TTS_INTERVAL_MS - elapsed);
@@ -100,7 +114,7 @@ async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
 
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/` +
-    `${encodeURIComponent(config.geminiTtsModel)}:generateContent`;
+    `${encodeURIComponent(model)}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
@@ -134,7 +148,11 @@ async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Gemini TTS HTTP ${res.status}: ${body.slice(0, 300)}`);
+    const error = new Error(
+      `Gemini TTS HTTP ${res.status}: ${body.slice(0, 300)}`,
+    ) as Error & { status: number };
+    error.status = res.status;
+    throw error;
   }
 
   const json = (await res.json()) as {
@@ -155,6 +173,28 @@ async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
     data: Buffer.from(inline.data, "base64"),
     sampleRate: sampleRateFromMimeType(inline.mimeType),
   };
+}
+
+/** Kvota tugagan modeldan keyingisiga o‘tib urinib ko‘radi */
+async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
+  let lastError: unknown;
+
+  for (const model of ttsModelPool.candidates()) {
+    try {
+      return await requestSpeechFrom(model, text);
+    } catch (err) {
+      lastError = err;
+      if (isRateLimitError(err) || isModelUnavailableError(err)) {
+        ttsModelPool.markExhausted(model);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gemini TTS muvaffaqiyatsiz");
 }
 
 /** Xom PCM (s16le) ni Telegram voice uchun OGG/Opus ga o‘tkazadi */
