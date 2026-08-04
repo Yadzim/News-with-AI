@@ -32,7 +32,7 @@ let ffmpegWarned = false;
 /** ffmpeg yo‘q bo‘lsa qayta tekshirishdan oldingi tanaffus */
 const FFMPEG_RECHECK_MS = 60_000;
 
-const inFlight = new Map<string, Promise<string | null>>();
+const inFlight = new Map<string, Promise<NewsAudio | null>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -197,8 +197,16 @@ async function requestGeminiSpeech(text: string): Promise<PcmAudio> {
     : new Error("Gemini TTS muvaffaqiyatsiz");
 }
 
-/** Xom PCM (s16le) ni Telegram voice uchun OGG/Opus ga o‘tkazadi */
-function pcmToOggOpus(pcm: PcmAudio, outputPath: string): Promise<void> {
+/**
+ * Xom PCM (s16le) ni berilgan kodek bilan faylga o‘tkazadi.
+ * Telegram voice OGG/Opus talab qiladi, saytdagi pleyer uchun esa MP3 kerak —
+ * Safari/iOS OGG ni ijro eta olmaydi.
+ */
+function encodePcm(
+  pcm: PcmAudio,
+  outputPath: string,
+  codecArgs: string[],
+): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
     const ffmpeg = spawn(
       "ffmpeg",
@@ -210,10 +218,7 @@ function pcmToOggOpus(pcm: PcmAudio, outputPath: string): Promise<void> {
         "-ar", String(pcm.sampleRate),
         "-ac", "1",
         "-i", "pipe:0",
-        "-c:a", "libopus",
-        "-b:a", "32k",
-        "-ar", "48000",
-        "-ac", "1",
+        ...codecArgs,
         outputPath,
       ],
       { stdio: ["pipe", "ignore", "pipe"] },
@@ -235,25 +240,52 @@ function pcmToOggOpus(pcm: PcmAudio, outputPath: string): Promise<void> {
   });
 }
 
-async function buildAudio(news: NewsRow): Promise<string | null> {
-  // Guruh va kanalga yuborishda bitta fayl qayta ishlatiladi
-  if (news.audio_path && existsSync(news.audio_path)) return news.audio_path;
+const OPUS_ARGS = ["-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1"];
+const MP3_ARGS = ["-c:a", "libmp3lame", "-b:a", "64k", "-ar", "44100", "-ac", "1"];
+
+export type NewsAudio = { ogg: string; mp3: string | null };
+
+async function buildAudio(news: NewsRow): Promise<NewsAudio | null> {
+  // Bir marta yaratilgan fayl guruh, kanal va saytda qayta ishlatiladi
+  if (news.audio_path && existsSync(news.audio_path)) {
+    return {
+      ogg: news.audio_path,
+      mp3:
+        news.audio_web_path && existsSync(news.audio_web_path)
+          ? news.audio_web_path
+          : null,
+    };
+  }
 
   const text = ttsTextFromNews(news);
   if (!text) return null;
 
   mkdirSync(AUDIO_DIR, { recursive: true });
-  const outputPath = join(AUDIO_DIR, `${news.id}.ogg`);
+  const oggPath = join(AUDIO_DIR, `${news.id}.ogg`);
+  const mp3Path = join(AUDIO_DIR, `${news.id}.mp3`);
 
   try {
     const pcm = await requestGeminiSpeech(text);
-    await pcmToOggOpus(pcm, outputPath);
-    setNewsAudioPath(news.id, outputPath);
-    return outputPath;
+    await encodePcm(pcm, oggPath, OPUS_ARGS);
+
+    // MP3 ixtiyoriy: chiqmasa Telegram baribir ishlaydi, faqat saytda
+    // pleyer bo‘lmaydi
+    let webPath: string | null = mp3Path;
+    try {
+      await encodePcm(pcm, mp3Path, MP3_ARGS);
+    } catch (err) {
+      console.error(`MP3 yaratilmadi (${news.id}):`, err);
+      rmSync(mp3Path, { force: true });
+      webPath = null;
+    }
+
+    setNewsAudioPath(news.id, { ogg: oggPath, mp3: webPath });
+    return { ogg: oggPath, mp3: webPath };
   } catch (err) {
     console.error(`TTS xatosi (${news.id}):`, err);
-    // Yarim yozilgan faylni qoldirmaymiz
-    rmSync(outputPath, { force: true });
+    // Yarim yozilgan fayllarni qoldirmaymiz
+    rmSync(oggPath, { force: true });
+    rmSync(mp3Path, { force: true });
     return null;
   }
 }
@@ -262,7 +294,9 @@ async function buildAudio(news: NewsRow): Promise<string | null> {
  * Yangilik uchun audio tayyorlaydi. Xato bo‘lsa `null` qaytaradi —
  * chaqiruvchi baribir matnni yuboraveradi.
  */
-export async function generateNewsAudio(news: NewsRow): Promise<string | null> {
+export async function generateNewsAudio(
+  news: NewsRow,
+): Promise<NewsAudio | null> {
   if (!ttsAvailable()) return null;
 
   const existing = inFlight.get(news.id);
@@ -273,11 +307,29 @@ export async function generateNewsAudio(news: NewsRow): Promise<string | null> {
   return promise;
 }
 
-export function deleteAudioFile(path: string | null | undefined): void {
-  if (!path) return;
-  // Faqat o‘zimiz yozadigan katalog ichidagi fayllar o‘chiriladi
-  if (!resolve(path).startsWith(AUDIO_DIR)) return;
-  rmSync(path, { force: true });
+/**
+ * Faqat allaqachon yaratilgan audioni qaytaradi — yangi TTS so‘rovi
+ * yuborilmaydi. Guruhga post qilishda shu ishlatiladi: fayl bor bo‘lsa
+ * ovoz ham ketadi, yo‘q bo‘lsa faqat matn (kvota sarflanmaydi).
+ */
+export function existingNewsAudio(news: NewsRow): NewsAudio | null {
+  if (!news.audio_path || !existsSync(news.audio_path)) return null;
+  return {
+    ogg: news.audio_path,
+    mp3:
+      news.audio_web_path && existsSync(news.audio_web_path)
+        ? news.audio_web_path
+        : null,
+  };
+}
+
+export function deleteAudioFile(...paths: (string | null | undefined)[]): void {
+  for (const path of paths) {
+    if (!path) continue;
+    // Faqat o‘zimiz yozadigan katalog ichidagi fayllar o‘chiriladi
+    if (!resolve(path).startsWith(AUDIO_DIR)) continue;
+    rmSync(path, { force: true });
+  }
 }
 
 /** Test/diagnostika uchun: WAV konteyneriga o‘rash */

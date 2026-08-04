@@ -1,6 +1,6 @@
 # AI News Aggregator & Telegram Bot
 
-Texnologik yangiliklarni RSS manbalardan yig‘adi, Google Gemini orqali o‘zbek tiliga tarjima/xulosalaydi va Telegram guruh Topics’iga hamda kanalga avto-post qiladi. Ixtiyoriy ravishda har bir postga yangilikni o‘qib beruvchi ovozli xabar ham qo‘shiladi.
+Texnologik yangiliklarni RSS manbalardan yig‘adi, Google Gemini orqali o‘zbek tiliga tarjima/xulosalaydi va uch joyda chiqaradi: **ochiq sayt**, Telegram guruh Topics’i va Telegram kanali. Har bir yangilikni ovoz chiqarib o‘qib beruvchi audio ham yaratiladi — saytda tinglash, Telegramda ovozli xabar.
 
 ## Stack
 
@@ -49,11 +49,34 @@ npm rebuild better-sqlite3
 rm -rf node_modules && npm ci
 ```
 
+## Sahifalar
+
+| Manzil   | Nima                                                     |
+| -------- | -------------------------------------------------------- |
+| `/`      | **Ochiq sayt** — hamma o‘qiy oladi, autentifikatsiya yo‘q |
+| `/admin` | Admin panel — kalit yoki Telegram ID talab qiladi         |
+
+Telegram Mini App ham `/` ni ochadi: o‘quvchi uchun bir xil sayt, mijoz
+mavzusiga (light/dark) moslashadi.
+
+### Ochiq sayt
+
+- Kategoriya bo‘yicha filtr va qidiruv
+- Kartalar: mobil 1 ustun, planshet 2, katta ekran 3
+- **Audio pleyer** — yangilikni saytda tinglash (MP3)
+- Maqola oynasi: to‘liq xulosa, sana, barcha manba havolalari
+- Yorug‘/qorong‘i mavzu (tizim sozlamasiga ergashadi, qo‘lda ham almashadi)
+- `?id=...` bilan bevosita maqolaga havola
+
+Ochiq API (autentifikatsiyasiz, faqat o‘qish):
+`GET /api/public/news`, `GET /api/public/news/:id`, `GET /api/public/meta`,
+`GET /audio/<id>.mp3`
+
 ## Admin panel
 
 ```bash
 npm run admin
-# http://127.0.0.1:8787
+# http://127.0.0.1:8787/admin
 ```
 
 Imkoniyatlar:
@@ -147,12 +170,20 @@ GEMINI_TTS_MODEL_FALLBACK=gemini-2.5-pro-preview-tts
 
 ## Ovozli xabar (TTS)
 
-Audio **faqat kanalga** yuboriladi — guruhga matn ketadi. TTS kvotasi
-qimmat bo‘lgani uchun shunday.
+Audio bir marta yaratiladi va **uch joyda** ishlatiladi:
 
-Yoqilganda kanal posti ikki xabardan iborat bo‘ladi: matn, keyin unga javob
-qilib yuborilgan ovozli xabar (voice). Audio Gemini TTS orqali yaratiladi,
-`ffmpeg` bilan OGG/Opus ga o‘tkaziladi va `data/audio/` da keshlanadi.
+| Joy      | Format   | Qachon                                            |
+| -------- | -------- | ------------------------------------------------- |
+| Kanal    | OGG/Opus | Post vaqtida yaratiladi                           |
+| Guruh    | OGG/Opus | Fayl **allaqachon bor bo‘lsa** — yangi TTS yo‘q   |
+| Sayt     | MP3      | Fayl bor bo‘lsa pleyer chiqadi                    |
+
+Guruh hech qachon yangi TTS so‘rovi yubormaydi — shuning uchun guruhga 50 ta
+post ketsa ham kvota sarflanmaydi. MP3 kerak, chunki Safari/iOS OGG ni ijro
+eta olmaydi.
+
+Audio Gemini TTS orqali yaratiladi, `ffmpeg` bilan ikkala formatga
+o‘tkaziladi va `data/audio/` da keshlanadi.
 
 ```bash
 sudo apt install -y ffmpeg
@@ -248,7 +279,13 @@ src/
   index.ts       # bot entry
   cron.ts        # faqat jadval
 tests/           # node --test
-public/          # admin panel / Mini App
+public/
+  index.html     # ochiq sayt
+  admin.html     # admin panel
+  css/site.css   # sayt dizayni
+  css/admin.css  # admin dizayni
+  js/site.js     # sayt (audio pleyer, filtr, maqola oynasi)
+  js/admin.js    # admin
 ```
 
 ## Post formati
