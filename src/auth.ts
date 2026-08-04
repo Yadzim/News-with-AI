@@ -13,6 +13,15 @@ export type InitDataResult = {
   authDate: number;
 };
 
+/** Diagnostika uchun: initData ichida qaysi maydonlar borligi (qiymatlarsiz) */
+export function initDataKeys(initData: string): string[] {
+  try {
+    return [...new URLSearchParams(initData).keys()].sort();
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Telegram Mini App `initData` imzosini tekshiradi.
  * https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
@@ -37,18 +46,31 @@ export function verifyInitData(
   const hash = params.get("hash");
   if (!hash) return null;
 
-  const dataCheckString = [...params.entries()]
-    .filter(([key]) => key !== "hash" && key !== "signature")
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
+  const buildCheckString = (excluded: string[]): string =>
+    [...params.entries()]
+      .filter(([key]) => !excluded.includes(key))
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n");
 
-  const secretKey = createHmac("sha256", "WebAppData").update(botToken).digest();
-  const computed = createHmac("sha256", secretKey)
-    .update(dataCheckString)
-    .digest("hex");
+  const secretKey = createHmac("sha256", "WebAppData")
+    .update(botToken.trim())
+    .digest();
 
-  if (!safeEqual(computed, hash)) return null;
+  const matches = (checkString: string): boolean =>
+    safeEqual(
+      createHmac("sha256", secretKey).update(checkString).digest("hex"),
+      hash,
+    );
+
+  // Telegram 2024-yilda uchinchi tomon tekshiruvi uchun `signature` maydonini
+  // qo‘shdi va uni HMAC hisobiga kiritish-kiritmasligi mijoz versiyasiga
+  // qarab farq qiladi. Ikkala variantni ham sinaymiz — ikkalasi ham
+  // bot tokeni bilan imzolangani uchun bu himoyani zaiflashtirmaydi.
+  if (!matches(buildCheckString(["hash"])) &&
+      !matches(buildCheckString(["hash", "signature"]))) {
+    return null;
+  }
 
   const authDate = Number(params.get("auth_date"));
   if (!Number.isInteger(authDate) || authDate <= 0) return null;

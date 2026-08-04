@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
-import { safeEqual, verifyInitData } from "../src/auth.js";
+import { initDataKeys, safeEqual, verifyInitData } from "../src/auth.js";
 
 const BOT_TOKEN = "123456:TEST-BOT-TOKEN";
 
-/** Telegram qanday imzolasa, test uchun ham shunday imzolaymiz */
+/**
+ * Telegram qanday imzolasa, test uchun ham shunday imzolaymiz.
+ * @param excludeFromHash HMAC hisobidan chiqariladigan maydonlar — Telegram
+ *   `signature` ni kiritish-kiritmasligi mijoz versiyasiga qarab farq qiladi
+ */
 function signInitData(
   fields: Record<string, string>,
   botToken = BOT_TOKEN,
+  excludeFromHash: string[] = [],
 ): string {
   const dataCheckString = Object.keys(fields)
+    .filter((key) => !excludeFromHash.includes(key))
     .sort()
     .map((key) => `${key}=${fields[key]}`)
     .join("\n");
@@ -32,6 +38,37 @@ describe("verifyInitData", () => {
     const initData = signInitData({ auth_date: authDate, user, query_id: "AA" });
     const result = verifyInitData(initData, BOT_TOKEN, 86_400, NOW);
     assert.deepEqual(result, { userId: 777, authDate: Number(authDate) });
+  });
+
+  it("signature maydoni HMAC ichida bo‘lganda ham qabul qiladi", () => {
+    // Telegram 2024-yildan beri uchinchi tomon tekshiruvi uchun `signature`
+    // qo‘shadi; ba’zi mijozlar uni hash hisobiga kiritadi
+    const initData = signInitData({
+      auth_date: authDate,
+      user,
+      signature: "Ed25519SignatureBase64Url",
+    });
+    assert.deepEqual(verifyInitData(initData, BOT_TOKEN, 86_400, NOW), {
+      userId: 777,
+      authDate: Number(authDate),
+    });
+  });
+
+  it("signature HMAC dan chiqarilgan bo‘lsa ham qabul qiladi", () => {
+    const initData = signInitData(
+      { auth_date: authDate, user, signature: "Ed25519SignatureBase64Url" },
+      BOT_TOKEN,
+      ["signature"],
+    );
+    assert.deepEqual(verifyInitData(initData, BOT_TOKEN, 86_400, NOW), {
+      userId: 777,
+      authDate: Number(authDate),
+    });
+  });
+
+  it("bot tokenidagi ortiqcha bo‘shliqqa qaramay ishlaydi", () => {
+    const initData = signInitData({ auth_date: authDate, user });
+    assert.ok(verifyInitData(initData, `  ${BOT_TOKEN}\n`, 86_400, NOW));
   });
 
   it("o‘zgartirilgan ma’lumotni rad etadi", () => {
@@ -81,5 +118,18 @@ describe("safeEqual", () => {
   it("uzunligi har xil bo‘lsa yiqilmaydi", () => {
     assert.equal(safeEqual("abc", "abcdef"), false);
     assert.equal(safeEqual("", "x"), false);
+  });
+});
+
+describe("initDataKeys", () => {
+  it("maydon nomlarini qaytaradi (qiymatlarsiz)", () => {
+    assert.deepEqual(
+      initDataKeys("user=%7B%22id%22%3A1%7D&auth_date=123&hash=abc"),
+      ["auth_date", "hash", "user"],
+    );
+  });
+
+  it("buzuq kirishda bo‘sh ro‘yxat", () => {
+    assert.deepEqual(initDataKeys(""), []);
   });
 });
