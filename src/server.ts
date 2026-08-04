@@ -322,16 +322,33 @@ app.get(
 
 function saveSchedule(target: "group" | "channel") {
   return handle((req: express.Request, res: express.Response) => {
-    const morning = String(req.body?.morning || "").trim();
-    const evening = String(req.body?.evening || "").trim();
-    const enabled = Boolean(req.body?.enabled);
+    const rawTimes: unknown = req.body?.times;
+    const times = Array.isArray(rawTimes)
+      ? rawTimes.map((t) => String(t).trim())
+      : String(rawTimes ?? "")
+          .split(",")
+          .map((t) => t.trim());
 
-    if (!parseHourMinute(morning) || !parseHourMinute(evening)) {
-      res.status(400).json({ error: "Vaqt HH:MM formatida bo‘lishi kerak" });
+    const valid = times.filter((t) => t && parseHourMinute(t));
+    if (valid.length === 0) {
+      res.status(400).json({
+        error: "Kamida bitta vaqt HH:MM formatida bo‘lishi kerak",
+      });
       return;
     }
 
-    const saved = saveTargetSchedule(target, { morning, evening, enabled });
+    const limitRaw = req.body?.limit;
+    const limit = limitRaw === undefined ? undefined : Number(limitRaw);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      res.status(400).json({ error: "Limit 1 dan katta butun son bo‘lishi kerak" });
+      return;
+    }
+
+    const saved = saveTargetSchedule(target, {
+      times: valid,
+      enabled: Boolean(req.body?.enabled),
+      ...(limit === undefined ? {} : { limit }),
+    });
     const applied = applyScheduleFromDb();
     res.json({ ...saved, applied: applied.message });
   });

@@ -17,6 +17,13 @@ export type NewsRow = {
   is_posted: number;
   is_posted_channel: number;
   audio_path: string | null;
+  /** Bir voqea haqidagi turli manbalar bitta cluster_id ostida turadi */
+  cluster_id: string | null;
+  /** Klasterdan faqat primary post qilinadi */
+  is_primary: number;
+  /** AI bergan qisqa voqea kaliti — klasterlash shu bo‘yicha */
+  topic_key: string | null;
+  merged_at: string | null;
   created_at: string;
 };
 
@@ -61,6 +68,10 @@ db.exec(`
     is_posted INTEGER NOT NULL DEFAULT 0,
     is_posted_channel INTEGER NOT NULL DEFAULT 0,
     audio_path TEXT,
+    cluster_id TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 1,
+    topic_key TEXT,
+    merged_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -134,6 +145,21 @@ function addMissingNewsColumns(): void {
   if (!cols.includes("audio_path")) {
     db.exec("ALTER TABLE news ADD COLUMN audio_path TEXT");
   }
+
+  // Klasterlash: bir voqea haqidagi turli manbalar bitta cluster_id ostida
+  if (!cols.includes("cluster_id")) {
+    db.exec("ALTER TABLE news ADD COLUMN cluster_id TEXT");
+    db.exec("UPDATE news SET cluster_id = id WHERE cluster_id IS NULL");
+  }
+  if (!cols.includes("is_primary")) {
+    db.exec("ALTER TABLE news ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!cols.includes("topic_key")) {
+    db.exec("ALTER TABLE news ADD COLUMN topic_key TEXT");
+  }
+  if (!cols.includes("merged_at")) {
+    db.exec("ALTER TABLE news ADD COLUMN merged_at TEXT");
+  }
 }
 
 /**
@@ -164,16 +190,22 @@ function dropCategoryCheckConstraint(): void {
         is_posted INTEGER NOT NULL DEFAULT 0,
         is_posted_channel INTEGER NOT NULL DEFAULT 0,
         audio_path TEXT,
+        cluster_id TEXT,
+        is_primary INTEGER NOT NULL DEFAULT 1,
+        topic_key TEXT,
+        merged_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       );
       INSERT INTO news_migrated (
         id, source_url, title_original, title_uz, summary_uz, category,
-        published_at, is_posted, is_posted_channel, audio_path, created_at
+        published_at, is_posted, is_posted_channel, audio_path,
+        cluster_id, is_primary, topic_key, merged_at, created_at
       )
       SELECT
         id, source_url, title_original, title_uz, summary_uz, category,
         published_at, COALESCE(is_posted, 0), COALESCE(is_posted_channel, 0),
-        audio_path, created_at
+        audio_path, COALESCE(cluster_id, id), COALESCE(is_primary, 1),
+        topic_key, merged_at, created_at
       FROM news;
       DROP TABLE news;
       ALTER TABLE news_migrated RENAME TO news;
@@ -190,6 +222,19 @@ function dropCategoryCheckConstraint(): void {
     db.pragma("foreign_keys = ON");
   }
 }
+
+export type ScheduleSettings = {
+  /** Kuniga necha marta va qaysi vaqtda — "HH:MM" ro‘yxati */
+  times: string[];
+  enabled: boolean;
+  /** Bir yuborishda nechta post ketsin */
+  limit: number;
+};
+
+const SCHEDULE_DEFAULTS: Record<"group" | "channel", ScheduleSettings> = {
+  group: { times: ["08:00", "20:00"], enabled: true, limit: 50 },
+  channel: { times: ["08:00", "14:00", "20:00"], enabled: true, limit: 5 },
+};
 
 export const DEFAULT_SOURCES: { name: string; url: string }[] = [
   { name: "TechCrunch", url: "https://techcrunch.com/feed/" },
@@ -266,24 +311,40 @@ function seedSources(): void {
 }
 
 function migrateSettings(): void {
-  const legacyKeys = [
+  // Eng eski sxema: bitta umumiy morning/evening
+  for (const [from, to] of [
     ["schedule_morning", "schedule_group_morning"],
     ["schedule_evening", "schedule_group_evening"],
     ["schedule_enabled", "schedule_group_enabled"],
-  ] as const;
-
-  for (const [from, to] of legacyKeys) {
+  ] as const) {
     const value = getSetting(from);
     if (value && !getSetting(to)) setSetting(to, value);
   }
 
+  // morning/evening → times ro‘yxati (ixtiyoriy sondagi vaqt uchun)
+  for (const target of ["group", "channel"] as const) {
+    if (getSetting(`schedule_${target}_times`)) continue;
+
+    const legacy = [
+      getSetting(`schedule_${target}_morning`),
+      getSetting(`schedule_${target}_evening`),
+    ].filter((value): value is string => Boolean(value));
+
+    if (legacy.length > 0) {
+      setSetting(`schedule_${target}_times`, legacy.join(","));
+      console.log(
+        `Migratsiya: ${target} jadvali times ga ko‘chirildi (${legacy.join(", ")})`,
+      );
+    }
+  }
+
   const defaults: Record<string, string> = {
-    schedule_group_morning: "08:00",
-    schedule_group_evening: "20:00",
+    schedule_group_times: SCHEDULE_DEFAULTS.group.times.join(","),
     schedule_group_enabled: "1",
-    schedule_channel_morning: "09:00",
-    schedule_channel_evening: "21:00",
+    schedule_group_limit: String(SCHEDULE_DEFAULTS.group.limit),
+    schedule_channel_times: SCHEDULE_DEFAULTS.channel.times.join(","),
     schedule_channel_enabled: "1",
+    schedule_channel_limit: String(SCHEDULE_DEFAULTS.channel.limit),
     tts_enabled: "0",
   };
   for (const [key, value] of Object.entries(defaults)) {
@@ -620,20 +681,133 @@ export type InsertNewsInput = {
   summary_uz: string;
   category: Category;
   published_at: string | null;
+  topic_key?: string | null;
+  /** Mavjud klasterga qo‘shilsa — o‘sha cluster_id */
+  cluster_id?: string | null;
 };
 
 export function insertNews(input: InsertNewsInput): NewsRow {
   const id = randomUUID();
   const source_url = normalizeSourceUrl(input.source_url);
+  const clusterId = input.cluster_id ?? id;
+
   db.prepare(
     `INSERT INTO news (
-      id, source_url, title_original, title_uz, summary_uz, category, published_at, is_posted
+      id, source_url, title_original, title_uz, summary_uz, category,
+      published_at, is_posted, cluster_id, is_primary, topic_key
     ) VALUES (
-      @id, @source_url, @title_original, @title_uz, @summary_uz, @category, @published_at, 0
+      @id, @source_url, @title_original, @title_uz, @summary_uz, @category,
+      @published_at, 0, @cluster_id, @is_primary, @topic_key
     )`,
-  ).run({ id, ...input, source_url });
+  ).run({
+    id,
+    source_url,
+    title_original: input.title_original,
+    title_uz: input.title_uz,
+    summary_uz: input.summary_uz,
+    category: input.category,
+    published_at: input.published_at,
+    cluster_id: clusterId,
+    // Mavjud klasterga qo‘shilgan bo‘lsa — bu qo‘shimcha manba, alohida
+    // post qilinmaydi
+    is_primary: input.cluster_id ? 0 : 1,
+    topic_key: input.topic_key ?? null,
+  });
 
   return getNewsById(id)!;
+}
+
+// ---------------------------------------------------------------------------
+// Klasterlash — bir voqea, bir nechta manba
+// ---------------------------------------------------------------------------
+
+/** `topic_key` ni taqqoslash uchun so‘zlar to‘plami */
+export function topicKeyTokens(key: string): Set<string> {
+  return new Set(
+    key
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 1),
+  );
+}
+
+export const TOPIC_MATCH_THRESHOLD = 0.6;
+
+/**
+ * Shu voqea haqidagi yangilik allaqachon bormi. Bor bo‘lsa uning
+ * `cluster_id` si qaytadi — yangi yozuv o‘sha klasterga qo‘shiladi.
+ *
+ * Faqat hali kanalga yuborilmagan va yaqinda kelgan yangiliklar tekshiriladi:
+ * eski postga keyin qo‘shilsa ham foydasi yo‘q.
+ */
+export function findClusterForTopic(
+  topicKey: string,
+  withinHours = 48,
+): string | null {
+  const tokens = topicKeyTokens(topicKey);
+  if (tokens.size === 0) return null;
+
+  const rows = db
+    .prepare(
+      `SELECT cluster_id, topic_key FROM news
+       WHERE topic_key IS NOT NULL
+         AND is_posted_channel = 0
+         AND created_at >= datetime('now', ?)
+       ORDER BY created_at DESC
+       LIMIT 300`,
+    )
+    .all(`-${withinHours} hours`) as {
+    cluster_id: string | null;
+    topic_key: string;
+  }[];
+
+  for (const row of rows) {
+    if (!row.cluster_id) continue;
+    const similarity = jaccardSimilarity(tokens, topicKeyTokens(row.topic_key));
+    if (similarity >= TOPIC_MATCH_THRESHOLD) return row.cluster_id;
+  }
+
+  return null;
+}
+
+export function getClusterMembers(clusterId: string): NewsRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM news WHERE cluster_id = ?
+       ORDER BY is_primary DESC, created_at ASC`,
+    )
+    .all(clusterId) as NewsRow[];
+}
+
+/** Klasterdagi manbalar soni */
+export function getClusterSize(clusterId: string): number {
+  return (
+    db
+      .prepare("SELECT COUNT(*) AS c FROM news WHERE cluster_id = ?")
+      .get(clusterId) as { c: number }
+  ).c;
+}
+
+/** Umumiy xulosa yaratilgach primary yozuvni yangilaydi */
+export function applyMergedSummary(
+  id: string,
+  input: { title_uz: string; summary_uz: string; category: Category },
+): void {
+  db.prepare(
+    `UPDATE news
+     SET title_uz = ?, summary_uz = ?, category = ?, merged_at = datetime('now')
+     WHERE id = ?`,
+  ).run(input.title_uz, input.summary_uz, input.category, id);
+}
+
+/** Klasterning barcha a’zolarini yuborilgan deb belgilaydi */
+export function markClusterPosted(
+  clusterId: string,
+  target: "group" | "channel",
+): void {
+  const column = target === "group" ? "is_posted" : "is_posted_channel";
+  db.prepare(`UPDATE news SET ${column} = 1 WHERE cluster_id = ?`).run(clusterId);
 }
 
 export function getNewsById(id: string): NewsRow | undefined {
@@ -651,6 +825,7 @@ export function getPendingNewsForGroup(limit = 20): NewsRow[] {
     .prepare(
       `SELECT * FROM news
        WHERE is_posted = 0
+         AND is_primary = 1
          AND title_uz IS NOT NULL
          AND summary_uz IS NOT NULL
          AND category IS NOT NULL
@@ -665,6 +840,7 @@ export function getPendingNewsForChannel(limit = 20): NewsRow[] {
     .prepare(
       `SELECT * FROM news
        WHERE is_posted_channel = 0
+         AND is_primary = 1
          AND title_uz IS NOT NULL
          AND summary_uz IS NOT NULL
          AND category IS NOT NULL
@@ -765,6 +941,7 @@ export function getNewsByCategory(
     .prepare(
       `SELECT * FROM news
        WHERE category = ?
+         AND is_primary = 1
          AND title_uz IS NOT NULL
          AND summary_uz IS NOT NULL
        ORDER BY created_at DESC
@@ -777,22 +954,37 @@ export function getNewsByCategory(
 // Jadval (schedule)
 // ---------------------------------------------------------------------------
 
-export type ScheduleSettings = {
-  morning: string;
-  evening: string;
-  enabled: boolean;
-};
-
 export type TargetScheduleSettings = {
   group: ScheduleSettings;
   channel: ScheduleSettings;
 };
 
+export function parseTimeList(raw: string): string[] {
+  return raw
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter((part) => /^\d{1,2}:\d{2}$/.test(part))
+    .map((part) => {
+      const [h, m] = part.split(":");
+      return `${String(Number(h)).padStart(2, "0")}:${m}`;
+    })
+    .filter((part) => {
+      const [h, m] = part.split(":").map(Number);
+      return h! >= 0 && h! <= 23 && m! >= 0 && m! <= 59;
+    })
+    .filter((part, i, all) => all.indexOf(part) === i)
+    .sort();
+}
+
 function readSchedule(prefix: "group" | "channel"): ScheduleSettings {
+  const defaults = SCHEDULE_DEFAULTS[prefix];
+  const times = parseTimeList(getSetting(`schedule_${prefix}_times`) || "");
+  const limit = Number(getSetting(`schedule_${prefix}_limit`));
+
   return {
-    morning: getSetting(`schedule_${prefix}_morning`) || "08:00",
-    evening: getSetting(`schedule_${prefix}_evening`) || "20:00",
+    times: times.length > 0 ? times : defaults.times,
     enabled: (getSetting(`schedule_${prefix}_enabled`) || "1") === "1",
+    limit: Number.isInteger(limit) && limit > 0 ? limit : defaults.limit,
   };
 }
 
@@ -802,11 +994,20 @@ export function getTargetScheduleSettings(): TargetScheduleSettings {
 
 export function saveTargetSchedule(
   target: "group" | "channel",
-  input: ScheduleSettings,
+  input: { times: string[]; enabled: boolean; limit?: number },
 ): ScheduleSettings {
-  setSetting(`schedule_${target}_morning`, input.morning);
-  setSetting(`schedule_${target}_evening`, input.evening);
+  const times = parseTimeList(input.times.join(","));
+  if (times.length === 0) {
+    throw new Error("Kamida bitta vaqt HH:MM formatida bo‘lishi kerak");
+  }
+
+  setSetting(`schedule_${target}_times`, times.join(","));
   setSetting(`schedule_${target}_enabled`, input.enabled ? "1" : "0");
+  if (input.limit !== undefined) {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
+    setSetting(`schedule_${target}_limit`, String(limit));
+  }
+
   return readSchedule(target);
 }
 
@@ -840,7 +1041,7 @@ const POSTED_CLAUSES: Record<Exclude<PostedFilter, "all">, string> = {
 };
 
 export function listNews(filters: ListNewsFilters = {}): {
-  items: NewsRow[];
+  items: (NewsRow & { cluster_size: number })[];
   total: number;
   page: number;
   limit: number;
@@ -877,11 +1078,14 @@ export function listNews(filters: ListNewsFilters = {}): {
 
   const items = db
     .prepare(
-      `SELECT * FROM news ${whereSql}
-       ORDER BY datetime(created_at) DESC
+      `SELECT n.*,
+              (SELECT COUNT(*) FROM news m WHERE m.cluster_id = n.cluster_id)
+                AS cluster_size
+       FROM news n ${whereSql.replace(/\b(category|is_posted|is_posted_channel|title_uz|title_original|summary_uz)\b/g, "n.$1")}
+       ORDER BY datetime(n.created_at) DESC
        LIMIT ? OFFSET ?`,
     )
-    .all(...params, limit, offset) as NewsRow[];
+    .all(...params, limit, offset) as (NewsRow & { cluster_size: number })[];
 
   return { items, total, page, limit };
 }

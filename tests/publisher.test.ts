@@ -8,6 +8,7 @@ import {
   formatNewsMessage,
   formatPublishedAt,
   formatVoiceCaption,
+  sourcesFromRows,
 } from "../src/publisher.js";
 
 function makeNews(overrides: Partial<NewsRow> = {}): NewsRow {
@@ -22,6 +23,10 @@ function makeNews(overrides: Partial<NewsRow> = {}): NewsRow {
     is_posted: 0,
     is_posted_channel: 0,
     audio_path: null,
+    cluster_id: null,
+    is_primary: 1,
+    topic_key: null,
+    merged_at: null,
     created_at: "2026-01-15 10:00:00",
     ...overrides,
   };
@@ -36,7 +41,7 @@ describe("formatNewsMessage", () => {
     assert.match(text, /🏷 Kategoriya: #AI/);
     assert.match(
       text,
-      /🔗 TechCrunch · <a href="https:\/\/techcrunch\.com\/2026\/01\/maqola">havola<\/a>$/,
+      /🔗 <a href="https:\/\/techcrunch\.com\/2026\/01\/maqola">TechCrunch<\/a>$/,
     );
   });
 
@@ -75,7 +80,7 @@ describe("formatNewsMessage", () => {
     const text = formatNewsMessage(
       makeNews({ summary_uz: Array.from({ length: 30 }, () => "X".repeat(500)).join("\n") }),
     );
-    assert.ok(text.endsWith("havola</a>"), "havola tegi kesilib qolgan");
+    assert.ok(text.endsWith("</a>"), "havola tegi kesilib qolgan");
     const opens = (text.match(/<a /g) || []).length;
     const closes = (text.match(/<\/a>/g) || []).length;
     assert.equal(opens, closes, "ochilgan/yopilgan teglar mos emas");
@@ -84,7 +89,7 @@ describe("formatNewsMessage", () => {
   it("bulletlar bo‘lmasa ham yiqilmaydi", () => {
     const text = formatNewsMessage(makeNews({ summary_uz: "" }));
     assert.match(text, /📌 Sinov sarlavhasi/);
-    assert.match(text, /havola<\/a>$/);
+    assert.match(text, /TechCrunch<\/a>$/);
   });
 
   it("title_uz bo‘lmasa asl sarlavhaga qaytadi", () => {
@@ -120,5 +125,57 @@ describe("formatVoiceCaption", () => {
   it("caption limitidan oshmaydi", () => {
     const caption = formatVoiceCaption(makeNews({ title_uz: "U".repeat(3000) }));
     assert.ok(caption.length <= 1024, `caption ${caption.length} belgi`);
+  });
+});
+
+describe("klaster (bir voqea, bir nechta manba)", () => {
+  it("bitta manba bo‘lsa oddiy havola qatori", () => {
+    const text = formatNewsMessage(makeNews());
+    assert.ok(!text.includes("Manbalar:"), "bitta manbada 'Manbalar' bo‘lmasin");
+    assert.match(text, /🔗 <a href=".+">TechCrunch<\/a>$/);
+  });
+
+  it("bir nechta manba pastda sanaladi", () => {
+    const text = formatNewsMessage(makeNews(), [
+      { name: "TechCrunch", url: "https://techcrunch.com/a" },
+      { name: "The Verge", url: "https://www.theverge.com/b" },
+      { name: "Wired", url: "https://www.wired.com/c" },
+    ]);
+    assert.match(text, /🔗 Manbalar: /);
+    assert.match(text, /<a href="https:\/\/techcrunch\.com\/a">TechCrunch<\/a>/);
+    assert.match(text, /<a href="https:\/\/www\.theverge\.com\/b">The Verge<\/a>/);
+    assert.match(text, /<a href="https:\/\/www\.wired\.com\/c">Wired<\/a>/);
+    assert.equal((text.match(/<a /g) || []).length, 3);
+  });
+
+  it("ko‘p manba bo‘lsa ham 4096 limitidan oshmaydi", () => {
+    const sources = Array.from({ length: 12 }, (_, i) => ({
+      name: `Manba ${i}`,
+      url: `https://example${i}.com/juda/uzun/yol/${"x".repeat(80)}`,
+    }));
+    const text = formatNewsMessage(
+      makeNews({ summary_uz: Array.from({ length: 20 }, () => "B".repeat(400)).join("\n") }),
+      sources,
+    );
+    assert.ok(text.length <= TELEGRAM_TEXT_LIMIT, `${text.length} belgi`);
+    assert.equal((text.match(/<a /g) || []).length, (text.match(/<\/a>/g) || []).length);
+  });
+});
+
+describe("sourcesFromRows", () => {
+  it("takrorlanuvchi manbalarni bir marta oladi", () => {
+    const rows = [
+      makeNews({ source_url: "https://techcrunch.com/a" }),
+      makeNews({ source_url: "https://techcrunch.com/b" }),
+      makeNews({ source_url: "https://www.wired.com/c" }),
+    ];
+    assert.deepEqual(sourcesFromRows(rows), [
+      { name: "TechCrunch", url: "https://techcrunch.com/a" },
+      { name: "Wired", url: "https://www.wired.com/c" },
+    ]);
+  });
+
+  it("bo‘sh ro‘yxat uchun bo‘sh natija", () => {
+    assert.deepEqual(sourcesFromRows([]), []);
   });
 });

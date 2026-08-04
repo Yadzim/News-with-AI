@@ -222,13 +222,13 @@
           <h3>Guruh — yuborish vaqti</h3>
           <p class="hint">Forum guruh Topics · Asia/Tashkent</p>
           <form id="scheduleGroupForm" class="schedule-form">
-            <label>
-              Ertalab
-              <input type="time" id="groupMorning" required />
-            </label>
-            <label>
-              Kechqurun
-              <input type="time" id="groupEvening" required />
+            <div class="time-list" id="groupTimes"></div>
+            <button type="button" class="btn-add-time" data-add-time="groupTimes">
+              + Vaqt qo‘shish
+            </button>
+            <label class="limit-field">
+              Har safar nechta post
+              <input type="number" id="groupLimit" min="1" max="100" required />
             </label>
             <label class="check">
               <input type="checkbox" id="groupEnabled" />
@@ -241,15 +241,15 @@
 
         <section class="sheet-block">
           <h3>Kanal — yuborish vaqti</h3>
-          <p class="hint">Telegram kanal · alohida jadval</p>
+          <p class="hint">Telegram kanal · alohida jadval. Ovozli xabar faqat shu yerga yuboriladi.</p>
           <form id="scheduleChannelForm" class="schedule-form">
-            <label>
-              Ertalab
-              <input type="time" id="channelMorning" required />
-            </label>
-            <label>
-              Kechqurun
-              <input type="time" id="channelEvening" required />
+            <div class="time-list" id="channelTimes"></div>
+            <button type="button" class="btn-add-time" data-add-time="channelTimes">
+              + Vaqt qo‘shish
+            </button>
+            <label class="limit-field">
+              Har safar nechta post
+              <input type="number" id="channelLimit" min="1" max="100" required />
             </label>
             <label class="check">
               <input type="checkbox" id="channelEnabled" />

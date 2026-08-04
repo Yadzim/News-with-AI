@@ -7,7 +7,9 @@ const TZ = "Asia/Tashkent";
 let tasks: ScheduledTask[] = [];
 let lastFingerprint = "";
 
-function parseHourMinute(value: string): { hour: number; minute: number } | null {
+export function parseHourMinute(
+  value: string,
+): { hour: number; minute: number } | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
   const hour = Number(match[1]);
@@ -17,57 +19,39 @@ function parseHourMinute(value: string): { hour: number; minute: number } | null
 }
 
 export function scheduleFingerprint(): string {
-  const s = getTargetScheduleSettings();
-  return JSON.stringify(s);
+  return JSON.stringify(getTargetScheduleSettings());
 }
 
 function stopTasks(): void {
-  for (const task of tasks) {
-    task.stop();
-  }
+  for (const task of tasks) task.stop();
   tasks = [];
 }
 
+/**
+ * Har bir vaqt uchun alohida cron ishi. Vaqtlar soni ixtiyoriy —
+ * kanalga kuniga 3 marta yuborish shu orqali sozlanadi.
+ */
 function registerSchedule(
   label: string,
   settings: ScheduleSettings,
   run: () => void,
-): string[] {
-  const messages: string[] = [];
+): string {
+  if (!settings.enabled) return `${label}: o‘chirilgan`;
 
-  if (!settings.enabled) {
-    messages.push(`${label}: o‘chirilgan`);
-    return messages;
-  }
+  const registered: string[] = [];
+  for (const time of settings.times) {
+    const parsed = parseHourMinute(time);
+    if (!parsed) continue;
 
-  const a = parseHourMinute(settings.morning);
-  const b = parseHourMinute(settings.evening);
-  if (!a || !b) {
-    messages.push(`${label}: noto‘g‘ri vaqt`);
-    return messages;
-  }
+    const expr = `${parsed.minute} ${parsed.hour} * * *`;
+    if (!cron.validate(expr)) continue;
 
-  if (a.minute === b.minute) {
-    const expr = `${a.minute} ${[...new Set([a.hour, b.hour])].sort((x, y) => x - y).join(",")} * * *`;
-    if (!cron.validate(expr)) {
-      messages.push(`${label}: noto‘g‘ri cron ${expr}`);
-      return messages;
-    }
     tasks.push(cron.schedule(expr, run, { timezone: TZ }));
-    messages.push(`${label}: ${settings.morning}, ${settings.evening}`);
-    return messages;
+    registered.push(time);
   }
 
-  const exprA = `${a.minute} ${a.hour} * * *`;
-  const exprB = `${b.minute} ${b.hour} * * *`;
-  if (!cron.validate(exprA) || !cron.validate(exprB)) {
-    messages.push(`${label}: noto‘g‘ri cron`);
-    return messages;
-  }
-  tasks.push(cron.schedule(exprA, run, { timezone: TZ }));
-  tasks.push(cron.schedule(exprB, run, { timezone: TZ }));
-  messages.push(`${label}: ${settings.morning}, ${settings.evening}`);
-  return messages;
+  if (registered.length === 0) return `${label}: noto‘g‘ri vaqt`;
+  return `${label}: ${registered.join(", ")} (har safar ${settings.limit} ta)`;
 }
 
 export function applyScheduleFromDb(): { ok: boolean; message: string } {
@@ -75,41 +59,28 @@ export function applyScheduleFromDb(): { ok: boolean; message: string } {
   stopTasks();
   lastFingerprint = scheduleFingerprint();
 
-  const parts: string[] = [];
-
-  parts.push(
-    ...registerSchedule("Guruh", settings.group, () => {
+  const parts = [
+    registerSchedule("Guruh", settings.group, () => {
       void runGroupPipeline().catch((err) => {
         console.error("Guruh schedule xatosi:", err);
       });
     }),
-  );
-
-  parts.push(
-    ...registerSchedule("Kanal", settings.channel, () => {
+    registerSchedule("Kanal", settings.channel, () => {
       void runPublishChannel().catch((err) => {
         console.error("Kanal schedule xatosi:", err);
       });
     }),
-  );
+  ];
 
-  return {
-    ok: true,
-    message: `${parts.join(" · ")} (${TZ})`,
-  };
+  return { ok: true, message: `${parts.join(" · ")} (${TZ})` };
 }
 
 export function startScheduleWatcher(intervalMs = 30_000): void {
-  const applied = applyScheduleFromDb();
-  console.log(applied.message);
+  console.log(applyScheduleFromDb().message);
 
   setInterval(() => {
-    const next = scheduleFingerprint();
-    if (next !== lastFingerprint) {
-      const result = applyScheduleFromDb();
-      console.log(`Schedule yangilandi: ${result.message}`);
+    if (scheduleFingerprint() !== lastFingerprint) {
+      console.log(`Schedule yangilandi: ${applyScheduleFromDb().message}`);
     }
   }, intervalMs);
 }
-
-export { parseHourMinute };

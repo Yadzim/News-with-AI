@@ -65,7 +65,9 @@ Imkoniyatlar:
   qo‘yish; har bir manbaning oxirgi holati va xatosi ko‘rinadi
 - **Qayta olib kelish** (RSS + AI) — fon rejimida, jarayon ko‘rsatkichi bilan
 - **Telegramga yuborish** — guruh va kanalga alohida
-- Yuborish vaqtini sozlash (guruh va kanal uchun alohida, Asia/Tashkent)
+- **Yuborish jadvali** — guruh va kanal uchun alohida: ixtiyoriy sondagi
+  vaqt (kanalga standart kuniga 3 marta) va har safar nechta post ketishi
+  (kanalga standart 5 ta)
 - **Ovozli xabar (TTS)** — yoqish/o‘chirish
 
 ## Xavfsizlik
@@ -112,12 +114,45 @@ Faqat to‘g‘ridan-to‘g‘ri RSS/Atom feed havolasi qabul qilinadi (`http`/`
 Odatiy sahifa URL’i berilsa aniq xato qaytadi. Har bir manba uchun oxirgi
 yig‘ish vaqti, qo‘shilgan yangiliklar soni va xatosi saqlanadi.
 
+## Bir xil yangiliklarni birlashtirish
+
+Bitta voqea bir necha manbada chiqsa, ular alohida post bo‘lmaydi. AI har bir
+yangilik uchun qisqa **voqea kaliti** (`topic_key`) qaytaradi — masalan
+`apple m5 chip launch`. Kalitlar 60% dan ortiq mos kelsa yangilik mavjud
+klasterga qo‘shiladi.
+
+Post vaqtida klasterdagi barcha manbalardan **bitta umumiy xulosa** olinadi
+(bir marta, natija bazaga yoziladi) va pastda hamma manba havolasi sanaladi:
+
+```
+🔗 Manbalar: TechCrunch · The Verge · Wired
+```
+
+Umumiy xulosa uchun AI chaqiruvi yiqilsa (kvota) post baribir ketadi — faqat
+asosiy manbaning xulosasi bilan. Admin panelda klaster «3 manba» belgisi bilan
+ko‘rinadi.
+
+## Gemini kvotasi va ikkinchi model
+
+Tahlil ham, ovoz sintezi ham **ikkita modeldan** foydalanadi. Birinchisining
+kvotasi tugasa (429) u vaqtincha chetlatiladi va so‘rov ikkinchisiga o‘tadi;
+`GEMINI_COOLDOWN_MINUTES` (default 30) o‘tgach birinchisi yana sinaladi.
+
+```env
+GEMINI_MODEL=gemini-3.1-flash-lite
+GEMINI_MODEL_FALLBACK=gemini-2.0-flash
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_MODEL_FALLBACK=gemini-2.5-pro-preview-tts
+```
+
 ## Ovozli xabar (TTS)
 
-Yoqilganda har bir post ikki xabardan iborat bo‘ladi: matn, keyin unga javob
+Audio **faqat kanalga** yuboriladi — guruhga matn ketadi. TTS kvotasi
+qimmat bo‘lgani uchun shunday.
+
+Yoqilganda kanal posti ikki xabardan iborat bo‘ladi: matn, keyin unga javob
 qilib yuborilgan ovozli xabar (voice). Audio Gemini TTS orqali yaratiladi,
-`ffmpeg` bilan OGG/Opus ga o‘tkaziladi va `data/audio/` da keshlanadi —
-shuning uchun guruh va kanalga bitta fayl ishlatiladi.
+`ffmpeg` bilan OGG/Opus ga o‘tkaziladi va `data/audio/` da keshlanadi.
 
 ```bash
 sudo apt install -y ffmpeg
@@ -167,7 +202,10 @@ Avto-post serverdagi `news-admin` (systemd) orqali ishlaydi.
 | --------------------- | -------------------------------------------------- |
 | `GEMINI_API_KEY`      | Google AI Studio kaliti                            |
 | `GEMINI_MODEL`        | Tarjima/xulosa modeli                              |
+| `GEMINI_MODEL_FALLBACK` | Kvota tugaganda ishlatiladigan ikkinchi model    |
 | `GEMINI_TTS_MODEL`    | Ovoz sintezi modeli                                |
+| `GEMINI_TTS_MODEL_FALLBACK` | Ovoz uchun ikkinchi model                    |
+| `GEMINI_COOLDOWN_MINUTES` | Kvotasi tugagan model necha daqiqa chetlatilsin |
 | `TTS_VOICE`           | Gemini ovoz nomi (masalan `Kore`)                  |
 | `TELEGRAM_BOT_TOKEN`  | @BotFather tokeni                                  |
 | `TELEGRAM_GROUP_ID`   | Forum guruh ID (`-100...`)                          |
@@ -197,7 +235,8 @@ src/
   db.ts          # SQLite sxema, migratsiyalar, CRUD
   url.ts         # URL normalizatsiya va sxema tekshiruvi
   fetcher.ts     # RSS + dedupe
-  ai.ts          # Gemini tarjima/xulosa
+  ai.ts          # Gemini tarjima/xulosa + klaster birlashtirish
+  gemini.ts      # model hovuzi (kvota tugaganda fallback)
   tts.ts         # Gemini TTS → OGG/Opus
   publisher.ts   # guruh/kanalga post
   telegram.ts    # umumiy Bot instansiyasi
@@ -238,3 +277,5 @@ Bir xil yangilik ikki marta chiqmasligi uchun uch qatlam bor:
    Jaccard koeffitsienti (≥0.85) bo‘yicha solishtiriladi.
 3. **O‘chirilgan URL lar** — admin paneldan o‘chirilgan yangilik `deleted_urls`
    ga yoziladi va qayta olib kelinmaydi.
+4. **Klasterlash** — turli manbadagi bir voqea `topic_key` bo‘yicha bitta
+   postga birlashtiriladi (yuqoriga qarang).

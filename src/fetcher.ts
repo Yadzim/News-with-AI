@@ -1,6 +1,7 @@
 import Parser from "rss-parser";
 import { processNews } from "./ai.js";
 import {
+  findClusterForTopic,
   insertNews,
   isUrlBlocked,
   listActiveSources,
@@ -99,6 +100,12 @@ async function processFeed(
       try {
         const processed = await processNews({ title, content, url: sourceUrl });
 
+        // Shu voqea boshqa manbadan allaqachon kelganmi — kelgan bo‘lsa
+        // alohida post qilinmaydi, o‘sha klasterga qo‘shiladi
+        const clusterId = processed.topic_key
+          ? findClusterForTopic(processed.topic_key)
+          : null;
+
         insertNews({
           source_url: sourceUrl,
           title_original: title,
@@ -106,10 +113,16 @@ async function processFeed(
           summary_uz: processed.summary_uz,
           category: processed.category,
           published_at: item.isoDate || item.pubDate || null,
+          topic_key: processed.topic_key,
+          cluster_id: clusterId,
         });
 
         added += 1;
-        console.log(`[${source.name}] qo‘shildi: ${processed.title_uz}`);
+        console.log(
+          clusterId
+            ? `[${source.name}] klasterga qo‘shildi: ${processed.title_uz}`
+            : `[${source.name}] qo‘shildi: ${processed.title_uz}`,
+        );
       } catch (err) {
         itemErrors += 1;
         console.error(`[${source.name}] AI/DB xato (${sourceUrl}):`, err);

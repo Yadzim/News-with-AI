@@ -17,6 +17,10 @@ function makeNews(overrides: Partial<NewsRow> = {}): NewsRow {
     is_posted: 0,
     is_posted_channel: 0,
     audio_path: null,
+    cluster_id: null,
+    is_primary: 1,
+    topic_key: null,
+    merged_at: null,
     created_at: "2026-01-01 00:00:00",
     ...overrides,
   };
