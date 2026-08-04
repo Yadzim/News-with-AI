@@ -2,12 +2,20 @@
 <html lang="uz">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f8fb" media="(prefers-color-scheme: light)" />
+    <title>Tech Pulse — texnologik yangiliklar o‘zbek tilida</title>
     <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+      name="description"
+      content="Dunyo texnologiya yangiliklari o‘zbek tilida: qisqa xulosalar, ovozli o‘qish va asl manbalar."
     />
-    <meta name="theme-color" content="#0b1220" />
-    <title>Tech News</title>
+    <meta property="og:title" content="Tech Pulse" />
+    <meta
+      property="og:description"
+      content="Texnologik yangiliklar o‘zbek tilida — qisqa, tushunarli, ovozli."
+    />
+    <meta property="og:type" content="website" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,78 +23,121 @@
       rel="stylesheet"
     />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/css/admin.css" />
+    <link rel="stylesheet" href="/css/site.css" />
   </head>
   <body>
-    <div class="app">
-      <header class="header">
-        <div class="header-main">
-          <div>
-            <p class="brand">Tech Pulse</p>
-            <h1>Yangiliklar</h1>
-          </div>
-          <div class="header-actions">
-            <button type="button" id="btnRefresh" class="icon-btn" aria-label="Yangilash" title="Yangilash">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 0 0 19 12c0-1.93-.78-3.68-2.05-4.95zM6 12c0-1.1.3-2.13.82-3.03l-1.46-1.46A6.97 6.97 0 0 0 5 12c0 3.87 3.13 7 7 7v3l5-5-5-5v3a5 5 0 0 1-5-5z"
-                />
-              </svg>
-            </button>
-            <button type="button" id="btnOpenSettings" class="icon-btn" aria-label="Sozlamalar">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.07 7.07 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.42.34.66.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.52 0 .66-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z"
-                />
-              </svg>
-            </button>
-          </div>
+    <a class="skip-link" href="#feed">Asosiy qismga o‘tish</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">◈</span>
+          <span class="brand-text">
+            <strong>Tech Pulse</strong>
+            <small>Texnologiya yangiliklari — o‘zbekcha</small>
+          </span>
+        </a>
+
+        <div class="header-actions">
+          <a
+            id="channelLink"
+            class="ghost-btn"
+            href="#"
+            target="_blank"
+            rel="noopener"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M9.8 15.6 9.6 19c.4 0 .6-.2.8-.4l1.9-1.8 3.9 2.9c.7.4 1.2.2 1.4-.7l2.6-12.2c.2-1-.4-1.4-1-1.1L3.3 10.3c-1 .4-1 .9-.2 1.2l4.3 1.3 9.9-6.2c.5-.3.9-.1.5.2L9.8 15.6z"
+              />
+            </svg>
+            <span>Kanal</span>
+          </a>
+          <button
+            type="button"
+            id="themeToggle"
+            class="icon-btn"
+            aria-label="Mavzuni almashtirish"
+          >
+            <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-13.5a1 1 0 0 1 1 1V6a1 1 0 1 1-2 0V4.5a1 1 0 0 1 1-1zm0 15a1 1 0 0 1 1 1V21a1 1 0 1 1-2 0v-1.5a1 1 0 0 1 1-1zM4.5 11h1.5a1 1 0 1 1 0 2H4.5a1 1 0 1 1 0-2zm13.5 0h1.5a1 1 0 1 1 0 2H18a1 1 0 1 1 0-2zM6.3 5a1 1 0 0 1 1.4 0l1 1a1 1 0 1 1-1.4 1.4l-1-1a1 1 0 0 1 0-1.4zm10 10a1 1 0 0 1 1.4 0l1 1a1 1 0 0 1-1.4 1.4l-1-1a1 1 0 0 1 0-1.4zM19 6.4l-1 1A1 1 0 0 1 16.6 6l1-1A1 1 0 0 1 19 6.4zM7.4 18l-1 1A1 1 0 0 1 5 17.6l1-1A1 1 0 0 1 7.4 18z"
+              />
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
+              />
+            </svg>
+          </button>
         </div>
-
-        <div class="chips" id="categoryChips" role="tablist" aria-label="Kategoriyalar"></div>
-
-        <div class="status-row" role="tablist" aria-label="Holat">
-          <button type="button" class="status-chip is-active" data-posted="all">Hammasi</button>
-          <button type="button" class="status-chip" data-posted="group_no">Guruh yangi</button>
-          <button type="button" class="status-chip" data-posted="channel_no">Kanal yangi</button>
-        </div>
-
-        <label class="search">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
-            />
-          </svg>
-          <input id="filterQ" type="search" placeholder="Qidiruv..." enterkeyhint="search" />
-        </label>
-      </header>
-
-      <main class="feed" id="newsList" aria-live="polite"></main>
-
-      <div class="pager">
-        <button type="button" id="btnPrev" class="btn btn-ghost">Oldingi</button>
-        <span id="pageInfo">1</span>
-        <button type="button" id="btnNext" class="btn btn-ghost">Keyingi</button>
       </div>
+    </header>
+
+    <section class="hero">
+      <div class="wrap">
+        <h1>Bugungi texnologiya, <em>o‘zbek tilida</em></h1>
+        <p>
+          Dunyo manbalaridan yig‘ilgan yangiliklar — qisqa xulosa, ovozli
+          o‘qish va asl havolalar bilan.
+        </p>
+      </div>
+    </section>
+
+    <div class="wrap toolbar">
+      <label class="search">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+          />
+        </svg>
+        <input
+          id="search"
+          type="search"
+          placeholder="Yangiliklardan qidirish..."
+          enterkeyhint="search"
+          aria-label="Qidiruv"
+        />
+      </label>
+      <nav class="chips" id="categories" aria-label="Kategoriyalar"></nav>
     </div>
 
-    <div id="settingsOverlay" class="overlay" hidden></div>
+    <main class="wrap" id="feed">
+      <div id="cards" class="cards" aria-live="polite"></div>
+      <div id="feedState" class="feed-state"></div>
+      <button type="button" id="loadMore" class="btn-more" hidden>
+        Ko‘proq yuklash
+      </button>
+    </main>
 
-    <div id="tokenGateOverlay" class="overlay" hidden></div>
-    <aside
-      id="tokenGatePanel"
-      class="sheet sheet-sm"
+    <footer class="site-footer">
+      <div class="wrap">
+        <p>
+          Yangiliklar avtomatik yig‘iladi va sun’iy intellekt yordamida
+          o‘zbek tiliga o‘giriladi. To‘liq matn uchun asl manbaga o‘ting.
+        </p>
+        <a href="/admin" class="footer-link">Admin</a>
+      </div>
+    </footer>
+
+    <!-- Maqola oynasi -->
+    <div id="readerOverlay" class="overlay" hidden></div>
+    <article
+      id="reader"
+      class="reader"
       aria-hidden="true"
       role="dialog"
-      aria-label="Kirish"
+      aria-modal="true"
+      aria-labelledby="readerTitle"
     >
-      <div class="sheet-handle" aria-hidden="true"></div>
-      <div class="sheet-head">
-        <h2>Maxfiy kalit</h2>
-        <button type="button" id="btnCloseTokenGate" class="icon-btn" aria-label="Yopish">
+      <header class="reader-head">
+        <span id="readerCategory" class="badge"></span>
+        <button type="button" id="readerClose" class="icon-btn" aria-label="Yopish">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <path
               fill="currentColor"
@@ -94,180 +145,16 @@
             />
           </svg>
         </button>
+      </header>
+      <div class="reader-body">
+        <h2 id="readerTitle"></h2>
+        <p id="readerDate" class="reader-date"></p>
+        <div id="readerAudio"></div>
+        <ul id="readerBullets" class="bullets"></ul>
+        <div id="readerSources" class="sources"></div>
       </div>
-      <div class="sheet-body">
-        <p class="hint">Sozlamalar paneliga kirish uchun maxfiy kalitni kiriting.</p>
-        <form id="tokenGateForm" class="token-gate-form">
-          <label class="token-field">
-            <span>Maxfiy kalit</span>
-            <input
-              id="tokenGateInput"
-              type="password"
-              placeholder="Maxfiy kalitni kiriting"
-              autocomplete="current-password"
-              required
-            />
-          </label>
-          <p id="tokenGateStatus" class="status" aria-live="polite"></p>
-          <button type="submit" class="btn btn-primary">Kirish</button>
-        </form>
-      </div>
-    </aside>
+    </article>
 
-    <aside id="settingsPanel" class="sheet" aria-hidden="true" role="dialog" aria-label="Sozlamalar">
-      <div class="sheet-handle" aria-hidden="true"></div>
-      <div class="sheet-head">
-        <h2>Sozlamalar</h2>
-        <button type="button" id="btnCloseSettings" class="icon-btn" aria-label="Yopish">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.17 12 2.89 5.71 4.3 4.29l6.29 6.3 6.3-6.3z"
-            />
-          </svg>
-        </button>
-      </div>
-
-      <div class="sheet-body">
-        <section class="sheet-block stats-grid">
-          <div class="mini-stat">
-            <span>Jami</span>
-            <strong id="statTotal">—</strong>
-          </div>
-          <div class="mini-stat">
-            <span>Guruh kutilmoqda</span>
-            <strong id="statPendingGroup">—</strong>
-          </div>
-          <div class="mini-stat">
-            <span>Kanal kutilmoqda</span>
-            <strong id="statPendingChannel">—</strong>
-          </div>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Amallar</h3>
-          <div class="btn-row">
-            <button type="button" id="btnFetch" class="btn btn-primary">Qayta olib kelish</button>
-            <button type="button" id="btnPublishGroup" class="btn btn-accent">Guruhga yuborish</button>
-            <button type="button" id="btnPublishChannel" class="btn btn-accent">Kanalga yuborish</button>
-          </div>
-          <div id="fetchProgress" class="progress" hidden>
-            <div class="progress-track"><div id="fetchProgressBar" class="progress-bar"></div></div>
-            <div class="progress-meta">
-              <span id="fetchProgressText">—</span>
-              <button type="button" id="btnCancelFetch" class="btn-link">Bekor qilish</button>
-            </div>
-          </div>
-          <p id="actionStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Kategoriyalar</h3>
-          <p class="hint">
-            Topic ID — forum guruhdagi <code>message_thread_id</code>. Bo‘sh
-            qoldirilsa yangilik guruhning umumiy topic’iga tushadi.
-          </p>
-          <div id="categoryList" class="crud-list"></div>
-          <form id="categoryForm" class="crud-form">
-            <label>
-              Nomi
-              <input id="categoryName" type="text" placeholder="Masalan: Fintex" required />
-            </label>
-            <label>
-              Topic ID
-              <input id="categoryThread" type="number" inputmode="numeric" placeholder="ixtiyoriy" />
-            </label>
-            <button type="submit" class="btn btn-primary">Qo‘shish</button>
-          </form>
-          <p id="categoryStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>RSS manbalari</h3>
-          <p class="hint">Faqat to‘g‘ridan-to‘g‘ri RSS/Atom feed havolasi (http yoki https).</p>
-          <div id="sourceList" class="crud-list"></div>
-          <form id="sourceForm" class="crud-form">
-            <label>
-              Nomi
-              <input id="sourceName" type="text" placeholder="Masalan: Ars Technica" required />
-            </label>
-            <label class="crud-wide">
-              Feed URL
-              <input
-                id="sourceUrl"
-                type="url"
-                placeholder="https://example.com/feed/"
-                required
-              />
-            </label>
-            <button type="submit" class="btn btn-primary">Qo‘shish</button>
-          </form>
-          <p id="sourceStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Ovozli xabar (TTS)</h3>
-          <p class="hint">
-            Yoqilsa, har bir post matndan keyin yangilikni o‘qib beruvchi ovozli
-            xabar ham yuboriladi. Serverda <code>ffmpeg</code> kerak.
-          </p>
-          <label class="switch-row">
-            <input type="checkbox" id="ttsEnabled" />
-            <span>Audio yuborish yoqilgan</span>
-          </label>
-          <p id="ttsStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Guruh — yuborish vaqti</h3>
-          <p class="hint">Forum guruh Topics · Asia/Tashkent</p>
-          <form id="scheduleGroupForm" class="schedule-form">
-            <div class="time-list" id="groupTimes"></div>
-            <button type="button" class="btn-add-time" data-add-time="groupTimes">
-              + Vaqt qo‘shish
-            </button>
-            <label class="limit-field">
-              Har safar nechta post
-              <input type="number" id="groupLimit" min="1" max="100" required />
-            </label>
-            <label class="check">
-              <input type="checkbox" id="groupEnabled" />
-              Avto-yuborish yoqilgan
-            </label>
-            <button type="submit" class="btn btn-primary">Saqlash</button>
-          </form>
-          <p id="scheduleGroupStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Kanal — yuborish vaqti</h3>
-          <p class="hint">Telegram kanal · alohida jadval. Ovozli xabar faqat shu yerga yuboriladi.</p>
-          <form id="scheduleChannelForm" class="schedule-form">
-            <div class="time-list" id="channelTimes"></div>
-            <button type="button" class="btn-add-time" data-add-time="channelTimes">
-              + Vaqt qo‘shish
-            </button>
-            <label class="limit-field">
-              Har safar nechta post
-              <input type="number" id="channelLimit" min="1" max="100" required />
-            </label>
-            <label class="check">
-              <input type="checkbox" id="channelEnabled" />
-              Avto-yuborish yoqilgan
-            </label>
-            <button type="submit" class="btn btn-primary">Saqlash</button>
-          </form>
-          <p id="scheduleChannelStatus" class="status" aria-live="polite"></p>
-        </section>
-
-        <section class="sheet-block">
-          <h3>Maxfiy kalit</h3>
-          <p class="hint">Saqlangan kalit bilan sozlamalar ochiladi.</p>
-          <button type="button" id="btnLogoutToken" class="btn btn-ghost">Kalitni o‘chirish</button>
-        </section>
-      </div>
-    </aside>
-
-    <script src="/js/admin.js"></script>
+    <script src="/js/site.js"></script>
   </body>
 </html>

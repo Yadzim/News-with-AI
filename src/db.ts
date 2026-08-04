@@ -16,7 +16,10 @@ export type NewsRow = {
   published_at: string | null;
   is_posted: number;
   is_posted_channel: number;
+  /** Telegram voice uchun OGG/Opus */
   audio_path: string | null;
+  /** Saytdagi pleyer uchun MP3 (Safari OGG ni qo‘llamaydi) */
+  audio_web_path: string | null;
   /** Bir voqea haqidagi turli manbalar bitta cluster_id ostida turadi */
   cluster_id: string | null;
   /** Klasterdan faqat primary post qilinadi */
@@ -68,6 +71,7 @@ db.exec(`
     is_posted INTEGER NOT NULL DEFAULT 0,
     is_posted_channel INTEGER NOT NULL DEFAULT 0,
     audio_path TEXT,
+    audio_web_path TEXT,
     cluster_id TEXT,
     is_primary INTEGER NOT NULL DEFAULT 1,
     topic_key TEXT,
@@ -145,6 +149,9 @@ function addMissingNewsColumns(): void {
   if (!cols.includes("audio_path")) {
     db.exec("ALTER TABLE news ADD COLUMN audio_path TEXT");
   }
+  if (!cols.includes("audio_web_path")) {
+    db.exec("ALTER TABLE news ADD COLUMN audio_web_path TEXT");
+  }
 
   // Klasterlash: bir voqea haqidagi turli manbalar bitta cluster_id ostida
   if (!cols.includes("cluster_id")) {
@@ -190,6 +197,7 @@ function dropCategoryCheckConstraint(): void {
         is_posted INTEGER NOT NULL DEFAULT 0,
         is_posted_channel INTEGER NOT NULL DEFAULT 0,
         audio_path TEXT,
+        audio_web_path TEXT,
         cluster_id TEXT,
         is_primary INTEGER NOT NULL DEFAULT 1,
         topic_key TEXT,
@@ -198,13 +206,13 @@ function dropCategoryCheckConstraint(): void {
       );
       INSERT INTO news_migrated (
         id, source_url, title_original, title_uz, summary_uz, category,
-        published_at, is_posted, is_posted_channel, audio_path,
+        published_at, is_posted, is_posted_channel, audio_path, audio_web_path,
         cluster_id, is_primary, topic_key, merged_at, created_at
       )
       SELECT
         id, source_url, title_original, title_uz, summary_uz, category,
         published_at, COALESCE(is_posted, 0), COALESCE(is_posted_channel, 0),
-        audio_path, COALESCE(cluster_id, id), COALESCE(is_primary, 1),
+        audio_path, audio_web_path, COALESCE(cluster_id, id), COALESCE(is_primary, 1),
         topic_key, merged_at, created_at
       FROM news;
       DROP TABLE news;
@@ -816,8 +824,13 @@ export function getNewsById(id: string): NewsRow | undefined {
     | undefined;
 }
 
-export function setNewsAudioPath(id: string, path: string | null): void {
-  db.prepare("UPDATE news SET audio_path = ? WHERE id = ?").run(path, id);
+export function setNewsAudioPath(
+  id: string,
+  paths: { ogg: string | null; mp3: string | null },
+): void {
+  db.prepare(
+    "UPDATE news SET audio_path = ?, audio_web_path = ? WHERE id = ?",
+  ).run(paths.ogg, paths.mp3, id);
 }
 
 export function getPendingNewsForGroup(limit = 20): NewsRow[] {
@@ -1088,6 +1101,68 @@ export function listNews(filters: ListNewsFilters = {}): {
     .all(...params, limit, offset) as (NewsRow & { cluster_size: number })[];
 
   return { items, total, page, limit };
+}
+
+/**
+ * Sayt uchun yangiliklar: faqat tayyor (tarjima qilingan) va klasterning
+ * asosiy yozuvi. Yuborilgan-yuborilmagani muhim emas — sayt Telegramdan
+ * mustaqil o‘qiladi.
+ */
+export function listPublicNews(filters: {
+  category?: string;
+  q?: string;
+  page?: number;
+  limit?: number;
+} = {}): { items: NewsRow[]; total: number; page: number; limit: number } {
+  const page = Math.max(1, filters.page ?? 1);
+  const limit = Math.min(50, Math.max(1, filters.limit ?? 12));
+  const offset = (page - 1) * limit;
+
+  const where = [
+    "is_primary = 1",
+    "title_uz IS NOT NULL",
+    "summary_uz IS NOT NULL",
+  ];
+  const params: unknown[] = [];
+
+  if (filters.category && filters.category !== "all") {
+    where.push("category = ?");
+    params.push(filters.category);
+  }
+
+  if (filters.q?.trim()) {
+    where.push("(title_uz LIKE ? OR summary_uz LIKE ?)");
+    const like = `%${filters.q.trim()}%`;
+    params.push(like, like);
+  }
+
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+
+  const total = (
+    db.prepare(`SELECT COUNT(*) AS c FROM news ${whereSql}`).get(...params) as {
+      c: number;
+    }
+  ).c;
+
+  const items = db
+    .prepare(
+      `SELECT * FROM news ${whereSql}
+       ORDER BY datetime(COALESCE(published_at, created_at)) DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as NewsRow[];
+
+  return { items, total, page, limit };
+}
+
+export function getPublicNewsById(id: string): NewsRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM news
+       WHERE id = ? AND is_primary = 1
+         AND title_uz IS NOT NULL AND summary_uz IS NOT NULL`,
+    )
+    .get(id) as NewsRow | undefined;
 }
 
 export function getNewsStats(): {

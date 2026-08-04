@@ -7,6 +7,9 @@ import { config } from "./config.js";
 import {
   POSTED_FILTERS,
   createCategory,
+  getClusterMembers,
+  getPublicNewsById,
+  listPublicNews,
   createSource,
   deleteCategory,
   deleteNews,
@@ -22,6 +25,7 @@ import {
   setTtsEnabled,
   updateCategory,
   updateSource,
+  type NewsRow,
   type PostedFilter,
 } from "./db.js";
 import { cancelFetch, getFetchJobState, startFetch } from "./fetch-job.js";
@@ -34,8 +38,9 @@ import {
   parseHourMinute,
   startScheduleWatcher,
 } from "./schedule.js";
+import { sourcesFromRows } from "./publisher.js";
 import { publisherBot } from "./telegram.js";
-import { deleteAudioFile, hasFfmpeg } from "./tts.js";
+import { AUDIO_DIR, deleteAudioFile, hasFfmpeg } from "./tts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
@@ -169,6 +174,89 @@ function optionalThreadId(value: unknown): number | null {
   return num;
 }
 
+
+// ---------------------------------------------------------------------------
+// Ochiq sayt uchun API (autentifikatsiyasiz, faqat o‘qish)
+// ---------------------------------------------------------------------------
+
+/** Yangilikni saytga chiqarish uchun xavfsiz ko‘rinishga keltiradi */
+function toPublicNews(row: NewsRow) {
+  const members = row.cluster_id ? getClusterMembers(row.cluster_id) : [row];
+  return {
+    id: row.id,
+    title: row.title_uz,
+    bullets: (row.summary_uz || "")
+      .split("\n")
+      .map((line) => line.replace(/^[🔹•\-\s]+/u, "").trim())
+      .filter(Boolean),
+    category: row.category,
+    published_at: row.published_at || row.created_at,
+    sources: sourcesFromRows(members),
+    audio_url: row.audio_web_path ? `/audio/${row.id}.mp3` : null,
+  };
+}
+
+app.get(
+  "/api/public/meta",
+  handle((_req, res) => {
+    res.json({
+      categories: listActiveCategoryNames(),
+      channel: config.telegramChannelId || null,
+    });
+  }),
+);
+
+app.get(
+  "/api/public/news",
+  handle((req, res) => {
+    const categoryRaw = String(req.query.category || "all");
+    const known = listActiveCategoryNames();
+
+    const result = listPublicNews({
+      category: known.includes(categoryRaw) ? categoryRaw : "all",
+      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      page: Number(req.query.page) || 1,
+      limit: Number(req.query.limit) || 12,
+    });
+
+    res.json({
+      items: result.items.map(toPublicNews),
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    });
+  }),
+);
+
+app.get(
+  "/api/public/news/:id",
+  handle((req, res) => {
+    const row = getPublicNewsById(String(req.params.id));
+    if (!row) {
+      res.status(404).json({ error: "Topilmadi" });
+      return;
+    }
+    res.json(toPublicNews(row));
+  }),
+);
+
+// Audio fayllar — ochiq, uzoq muddat keshlanadi (fayl nomi id ga bog‘langan)
+app.use(
+  "/audio",
+  express.static(AUDIO_DIR, {
+    maxAge: "30d",
+    immutable: true,
+    setHeaders: (res) => {
+      res.setHeader("Accept-Ranges", "bytes");
+    },
+  }),
+);
+
+// Static topa olmagan fayl — 404 (server xatosi emas)
+app.use("/audio", (_req, res) => {
+  res.status(404).json({ error: "Audio topilmadi" });
+});
+
 // ---------------------------------------------------------------------------
 // Umumiy
 // ---------------------------------------------------------------------------
@@ -241,7 +329,7 @@ app.delete(
       res.status(404).json({ error: "Topilmadi" });
       return;
     }
-    deleteAudioFile(removed.audio_path);
+    deleteAudioFile(removed.audio_path, removed.audio_web_path);
     res.json({ ok: true, stats: getNewsStats() });
   }),
 );
@@ -503,8 +591,20 @@ app.put(
 // ---------------------------------------------------------------------------
 
 if (existsSync(publicDir)) {
-  app.use(express.static(publicDir));
-  app.get("/", (_req, res) => {
+  // Telegram WebView va brauzer eski JS ni keshlab qolmasin
+  app.use(
+    express.static(publicDir, {
+      setHeaders: (res) => {
+        res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      },
+    }),
+  );
+
+  // Admin panel alohida sahifa; qolgan hamma narsa ochiq saytga tushadi
+  app.get("/admin", (_req, res) => {
+    res.sendFile(join(publicDir, "admin.html"));
+  });
+  app.get(/^\/(?!api\/|audio\/).*/, (_req, res) => {
     res.sendFile(join(publicDir, "index.html"));
   });
 }

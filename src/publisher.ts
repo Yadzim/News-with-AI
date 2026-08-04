@@ -15,7 +15,7 @@ import {
   unclaimGroupNews,
   type NewsRow,
 } from "./db.js";
-import { generateNewsAudio, ttsAvailable } from "./tts.js";
+import { existingNewsAudio, generateNewsAudio, ttsAvailable } from "./tts.js";
 import { escapeHtml, siteNameFromUrl } from "./url.js";
 
 const POST_DELAY_MS = 800;
@@ -185,8 +185,13 @@ async function prepareForPosting(
 type SendTarget = {
   chatId: string;
   threadId?: number;
-  /** Ovozli xabar faqat kanalga yuboriladi (TTS kvotasini tejash uchun) */
-  withAudio: boolean;
+  /**
+   * "generate" — audio yo‘q bo‘lsa yaratiladi (kanal)
+   * "reuse"    — faqat allaqachon yaratilgan fayl yuboriladi (guruh),
+   *              yangi TTS so‘rovi ketmaydi
+   * "none"     — audio yuborilmaydi
+   */
+  audio: "generate" | "reuse" | "none";
 };
 
 async function sendNews(
@@ -208,13 +213,19 @@ async function sendNews(
     },
   );
 
-  if (!target.withAudio || !ttsAvailable()) return;
+  if (target.audio === "none") return;
 
-  const audioPath = await generateNewsAudio(news);
-  if (!audioPath) return;
+  const audio =
+    target.audio === "generate"
+      ? ttsAvailable()
+        ? await generateNewsAudio(news)
+        : null
+      : existingNewsAudio(news);
+
+  if (!audio) return;
 
   try {
-    await bot.api.sendVoice(target.chatId, new InputFile(audioPath), {
+    await bot.api.sendVoice(target.chatId, new InputFile(audio.ogg), {
       ...threadOption,
       caption: formatVoiceCaption(news),
       reply_parameters: { message_id: sent.message_id },
@@ -248,7 +259,9 @@ export async function publishPendingToGroup(
         chatId: config.telegramGroupId,
         // Topic biriktirilmagan kategoriya guruhning General topic’iga tushadi
         ...(threadId === null ? {} : { threadId }),
-        withAudio: false,
+        // Guruhga yangi TTS so‘rovi yuborilmaydi — kanal uchun yaratilgan
+        // fayl bo‘lsa o‘shani qayta ishlatamiz
+        audio: "reuse",
       });
 
       if (news.cluster_id) markClusterPosted(news.cluster_id, "group");
@@ -290,7 +303,7 @@ export async function publishPendingToChannel(
 
       await sendNews(bot, news, sources, {
         chatId: config.telegramChannelId,
-        withAudio: true,
+        audio: "generate",
       });
 
       if (news.cluster_id) markClusterPosted(news.cluster_id, "channel");

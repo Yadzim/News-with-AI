@@ -185,6 +185,12 @@ server {
     root /var/www/news-bot/public;
     index index.html;
 
+    # Admin panel alohida sahifa
+    location = /admin {
+        try_files /admin.html =404;
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }
