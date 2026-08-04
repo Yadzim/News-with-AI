@@ -2,7 +2,7 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { safeEqual, verifyInitData } from "./auth.js";
+import { initDataKeys, safeEqual, verifyInitData } from "./auth.js";
 import { config } from "./config.js";
 import {
   POSTED_FILTERS,
@@ -121,7 +121,11 @@ function auth(
     } else {
       const verified = verifyInitData(initData, config.telegramBotToken);
       if (!verified) {
-        reasons.push("initData imzosi noto‘g‘ri yoki muddati o‘tgan");
+        reasons.push(
+          "initData imzosi noto‘g‘ri yoki muddati o‘tgan " +
+            `(maydonlar: ${initDataKeys(initData).join(",") || "yo‘q"}; ` +
+            `bot token ${config.telegramBotToken.length} belgi)`,
+        );
       } else if (!config.adminUserIds.includes(verified.userId)) {
         reasons.push(
           `user ${verified.userId} ADMIN_USER_IDS ro‘yxatida yo‘q ` +

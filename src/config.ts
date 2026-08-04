@@ -82,7 +82,9 @@ export const config = {
   geminiModel: parsed.data.GEMINI_MODEL,
   geminiTtsModel: parsed.data.GEMINI_TTS_MODEL,
   ttsVoice: parsed.data.TTS_VOICE,
-  telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN,
+  // .trim() muhim: initData imzosi aynan shu satrdan hisoblanadi, ortiqcha
+  // bo‘shliq butun tekshiruvni buzadi
+  telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN.trim(),
   telegramGroupId: normalizeTelegramChatId(parsed.data.TELEGRAM_GROUP_ID),
   telegramChannelId: parsed.data.TELEGRAM_CHANNEL_ID.trim()
     ? normalizeTelegramChatId(parsed.data.TELEGRAM_CHANNEL_ID.trim())
