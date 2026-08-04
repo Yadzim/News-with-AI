@@ -64,6 +64,20 @@ if (!hasToken && !hasTelegramAuth) {
   process.exit(1);
 }
 
+/**
+ * systemd `EnvironmentFile` dotenv’dan farqli o‘laroq qator ichidagi izohni
+ * kesmaydi va u qiymatga qo‘shilib ketadi. `EnvironmentFile` dotenv’dan oldin
+ * o‘qilgani uchun bunday qiymat g‘olib chiqadi va kalit hech qachon mos
+ * kelmaydi. Buni ishga tushishda aytib qo‘yamiz.
+ */
+if (/[\s#]/.test(config.adminToken)) {
+  console.warn(
+    "OGOHLANTIRISH: ADMIN_TOKEN ichida bo‘shliq yoki '#' bor.\n" +
+      "  Ehtimol .env da qator ichida izoh qolgan (ADMIN_TOKEN=abc  # izoh).\n" +
+      "  systemd izohni qiymatga qo‘shib yuboradi — izohni alohida qatorga oling.",
+  );
+}
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
@@ -83,23 +97,44 @@ function auth(
   res: express.Response,
   next: express.NextFunction,
 ): void {
+  // Nima uchun rad etilganini jurnalga yozamiz — sirlarsiz, lekin
+  // sababni aniqlash uchun yetarli
+  const reasons: string[] = [];
+
   if (hasToken) {
     const header = req.header("x-admin-token") || "";
     if (header && safeEqual(header, config.adminToken)) {
       next();
       return;
     }
+    reasons.push(
+      header
+        ? `token mos kelmadi (kelgan ${header.length} belgi, kutilgan ${config.adminToken.length})`
+        : "x-admin-token sarlavhasi yo‘q",
+    );
   }
 
   if (hasTelegramAuth) {
     const initData = req.header("x-telegram-init-data") || "";
-    const verified = verifyInitData(initData, config.telegramBotToken);
-    if (verified && config.adminUserIds.includes(verified.userId)) {
-      next();
-      return;
+    if (!initData) {
+      reasons.push("x-telegram-init-data sarlavhasi yo‘q");
+    } else {
+      const verified = verifyInitData(initData, config.telegramBotToken);
+      if (!verified) {
+        reasons.push("initData imzosi noto‘g‘ri yoki muddati o‘tgan");
+      } else if (!config.adminUserIds.includes(verified.userId)) {
+        reasons.push(
+          `user ${verified.userId} ADMIN_USER_IDS ro‘yxatida yo‘q ` +
+            `(ro‘yxat: ${config.adminUserIds.join(", ")})`,
+        );
+      } else {
+        next();
+        return;
+      }
     }
   }
 
+  console.warn(`401 ${req.method} ${req.path} — ${reasons.join(" | ")}`);
   res.status(401).json({ error: "Unauthorized" });
 }
 
@@ -475,6 +510,12 @@ app.listen(config.port, () => {
       .filter(Boolean)
       .join(" + ")}`,
   );
+  if (hasToken) {
+    console.log(`  ADMIN_TOKEN: ${config.adminToken.length} belgi`);
+  }
+  if (hasTelegramAuth) {
+    console.log(`  ADMIN_USER_IDS: ${config.adminUserIds.join(", ")}`);
+  }
   if (isTtsEnabled() && !hasFfmpeg()) {
     console.warn("TTS yoqilgan, lekin ffmpeg yo‘q — audio yuborilmaydi");
   }
