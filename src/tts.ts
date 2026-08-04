@@ -14,8 +14,12 @@ const MIN_TTS_INTERVAL_MS = 4_500;
 const TTS_TIMEOUT_MS = 120_000;
 
 let lastTtsRequestAt = 0;
-let ffmpegChecked: boolean | null = null;
+let ffmpegAvailable = false;
+let ffmpegCheckedAt = 0;
 let ffmpegWarned = false;
+
+/** ffmpeg yo‘q bo‘lsa qayta tekshirishdan oldingi tanaffus */
+const FFMPEG_RECHECK_MS = 60_000;
 
 const inFlight = new Map<string, Promise<string | null>>();
 
@@ -23,11 +27,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * ffmpeg mavjudligi. Topilgan bo‘lsa natija keshlanadi; topilmagan bo‘lsa
+ * har daqiqada qayta tekshiriladi — shunda `apt install ffmpeg` dan keyin
+ * xizmatni qayta ishga tushirish shart bo‘lmaydi.
+ */
 export function hasFfmpeg(): boolean {
-  if (ffmpegChecked !== null) return ffmpegChecked;
+  if (ffmpegAvailable) return true;
+  if (ffmpegCheckedAt && Date.now() - ffmpegCheckedAt < FFMPEG_RECHECK_MS) {
+    return false;
+  }
+
+  ffmpegCheckedAt = Date.now();
   const result = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" });
-  ffmpegChecked = !result.error && result.status === 0;
-  return ffmpegChecked;
+  ffmpegAvailable = !result.error && result.status === 0;
+
+  if (ffmpegAvailable) ffmpegWarned = false;
+  return ffmpegAvailable;
 }
 
 /**
