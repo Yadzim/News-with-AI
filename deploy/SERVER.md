@@ -100,6 +100,15 @@ WEBAPP_URL=https://news.example.com/
 
 **Muhim:**
 
+- `.env` da **qator ichida izoh yozmang**. systemd `EnvironmentFile` ni
+  dotenv’dan boshqacha o‘qiydi va izohni qiymatga qo‘shib yuboradi:
+
+  ```env
+  ADMIN_TOKEN=abc123   # BUNDAY QILMANG — izoh kalitning bir qismi bo‘lib qoladi
+  # Izohni alohida qatorga oling
+  ADMIN_TOKEN=abc123
+  ```
+
 - `TELEGRAM_GROUP_ID` oldida `-` bo‘lishi shart (`-100...`)
 - `ADMIN_TOKEN` **kamida 24 belgi** bo‘lishi kerak. `ADMIN_TOKEN` ham,
   `ADMIN_USER_IDS` ham bo‘sh bo‘lsa `news-admin` **ishga tushmaydi** —
@@ -336,7 +345,10 @@ sudo ufw status
 |--------------|--------|
 | `chat not found` | `TELEGRAM_GROUP_ID=-100...`; bot guruhda admin; kerak bo‘lsa botni chiqarib qayta qo‘shing |
 | Mini App ochilmaydi | HTTPS, to‘g‘ri `WEBAPP_URL`, BotFather Menu Button |
-| API `401 Unauthorized` | Sozlamalarda `ADMIN_TOKEN` ni kiriting |
+| API `401 Unauthorized` | `journalctl -u news-admin -n 20` — endi aniq sabab yoziladi (token uzunligi mos emas / user ID ro‘yxatda yo‘q / initData yo‘q) |
+| Kalit to‘g‘ri, lekin `401` | `.env` da qator ichida izoh qolmaganini tekshiring: `ADMIN_TOKEN=abc  # izoh`. systemd izohni qiymatga qo‘shib yuboradi — izohni **alohida qatorga** oling |
+| Mini App'da user ID ishlamayapti | Jurnalda `user <ID> ro‘yxatda yo‘q` yozuvi haqiqiy ID ni ko‘rsatadi — `.env` dagi `ADMIN_USER_IDS` ga o‘shani yozing |
+| Panel eski holatda qolgan | Telegram WebView keshi: nginx'ga `Cache-Control: no-cache` qo‘shing (`nginx.admin.conf.example`), Telegram'da botni yopib qayta oching |
 | `news-admin` darhol o‘chadi | `.env` da `ADMIN_TOKEN` yo‘q yoki **24 belgidan qisqa** (jurnalda hozirgi uzunligi yoziladi). `openssl rand -hex 32` bilan yangisini yarating |
 | Deploy "OK" deydi, lekin panel ishlamaydi | Xizmat crash-loopda: `systemctl show -p NRestarts --value news-admin` 0 dan katta. Sababi `journalctl -u news-admin -n 40` da |
 | `NODE_MODULE_VERSION` mos emas | `node_modules` boshqa Node versiyasida o‘rnatilgan: `npm rebuild better-sqlite3` yoki `rm -rf node_modules && npm ci` |

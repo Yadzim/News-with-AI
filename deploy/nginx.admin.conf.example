@@ -20,8 +20,11 @@ server {
     root /var/www/news-bot/public;
     index index.html;
 
+    # Telegram WebView statik fayllarni qattiq keshlaydi — eski admin.js
+    # qolib ketsa kirish ishlamay qoladi. Har safar qayta tekshirsin:
     location / {
         try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, must-revalidate";
     }
 
     location /api/ {
@@ -31,9 +34,15 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 300s;
+
+        # initData sarlavhasi uzun bo‘ladi (~1 KB)
+        proxy_buffer_size 16k;
+        proxy_buffers 4 16k;
     }
 }
 ```
+
+> `add_header` ni qo‘shgach: `sudo nginx -t && sudo systemctl reload nginx`
 
 ## Serverda
 
