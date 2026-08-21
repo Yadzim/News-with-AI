@@ -191,6 +191,11 @@ server {
         add_header Cache-Control "no-cache, must-revalidate";
     }
 
+    # Rasm/logo — yo‘q bo‘lsa 404, index.html emas
+    location /images/ {
+        try_files $uri =404;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }
