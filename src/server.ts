@@ -604,7 +604,8 @@ if (existsSync(publicDir)) {
   app.get("/admin", (_req, res) => {
     res.sendFile(join(publicDir, "admin.html"));
   });
-  app.get(/^\/(?!api\/|audio\/).*/, (_req, res) => {
+  // /images/ ham chetda: yo‘q rasm uchun index.html emas, 404 qaytsin
+  app.get(/^\/(?!api\/|audio\/|images\/).*/, (_req, res) => {
     res.sendFile(join(publicDir, "index.html"));
   });
 }

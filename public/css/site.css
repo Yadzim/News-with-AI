@@ -787,3 +787,12 @@ body.no-scroll {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Logo rasmi bo‘lsa — ramka ichiga to‘liq joylashadi */
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+  display: block;
+}

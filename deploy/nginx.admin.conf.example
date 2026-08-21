@@ -20,14 +20,19 @@ server {
     root /var/www/news-bot/public;
     index index.html;
 
-    # Telegram WebView statik fayllarni qattiq keshlaydi — eski admin.js
-    # qolib ketsa kirish ishlamay qoladi. Har safar qayta tekshirsin:
     # Admin panel alohida sahifa
     location = /admin {
         try_files /admin.html =404;
         add_header Cache-Control "no-cache, must-revalidate";
     }
 
+    # Rasm/logo — yo‘q bo‘lsa 404, index.html emas
+    location /images/ {
+        try_files $uri =404;
+    }
+
+    # Telegram WebView statik fayllarni qattiq keshlaydi — eski JS qolib
+    # ketsa sayt yangilanmaydi. Har safar qayta tekshirsin:
     location / {
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache, must-revalidate";
