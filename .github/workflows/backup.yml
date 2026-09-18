@@ -1,0 +1,229 @@
+# Serverdagi ma'lumotlarni GitHub Actions orqali tortib olish.
+# Natija: Actions -> shu run -> Artifacts bo'limidan yuklab olinadi.
+#
+# rev: 1   <- qayta ishga tushirish kerak bo'lsa shu raqamni oshiring
+name: Backup
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/proyektni-korish-fc7web]
+    paths: [".github/workflows/backup.yml"]
+
+concurrency:
+  group: backup-production
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: SSH kalitini tayyorlash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+        run: |
+          set -eu
+          [ -n "$SSH_HOST" ] || { echo "::error::SSH_HOST secret yo'q"; exit 1; }
+          [ -n "$SSH_USER" ] || { echo "::error::SSH_USER secret yo'q"; exit 1; }
+          [ -n "$SSH_KEY" ]  || { echo "::error::SSH_KEY secret yo'q";  exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_backup
+          chmod 600 ~/.ssh/id_backup
+          # Host kalitini oldindan olamiz; olinmasa birinchi ulanishda qabul qilinadi
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            echo "Host target"
+            echo "  HostName $SSH_HOST"
+            echo "  User $SSH_USER"
+            echo "  Port $SSH_PORT"
+            echo "  IdentityFile ~/.ssh/id_backup"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking accept-new"
+            echo "  ServerAliveInterval 30"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          mkdir -p out
+
+      - name: Serverni ko'zdan kechirish
+        run: |
+          set -eu
+          ssh target bash -s <<'EOF'
+          set -u
+          APP_DIR=/var/www/news-bot
+          echo "== disk =="; df -h "$APP_DIR" | tail -1
+          echo "== data/ =="; du -sh "$APP_DIR/data" 2>/dev/null || echo "data/ topilmadi"
+          echo "== baza =="; ls -lh "$APP_DIR"/data/news.db* 2>/dev/null || echo "news.db topilmadi"
+          echo "== audio =="
+          if [ -d "$APP_DIR/data/audio" ]; then
+            printf 'fayllar: %s, hajm: %s\n' \
+              "$(find "$APP_DIR/data/audio" -type f | wc -l)" \
+              "$(du -sh "$APP_DIR/data/audio" | cut -f1)"
+          else
+            echo "audio/ yo'q"
+          fi
+          EOF
+
+      # --- 1. Baza: eng muhimi, shuning uchun birinchi ---------------------
+      - name: Bazadan izchil nusxa olish
+        run: |
+          set -eu
+          ssh target bash -s <<'EOF'
+          set -eu
+          APP_DIR=/var/www/news-bot
+          OUT=/tmp/news-backup
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          cd "$APP_DIR"
+
+          # DATABASE_PATH ni .env dan o'qiymiz (faqat shu bitta qiymat;
+          # izoh va tirnoqlar tozalanadi). Boshqa kalitlar o'qilmaydi.
+          DB_REL=$(sed -n 's/^DATABASE_PATH=//p' .env 2>/dev/null | tail -1 \
+                   | sed 's/[[:space:]]*#.*$//' | tr -d "\"'" | xargs || true)
+          DB_REL="${DB_REL:-./data/news.db}"
+          case "$DB_REL" in
+            /*) DB="$DB_REL" ;;
+            *)  DB="$APP_DIR/${DB_REL#./}" ;;
+          esac
+          echo "Baza: $DB"
+          [ -f "$DB" ] || { echo "::error::Baza topilmadi: $DB"; exit 1; }
+
+          # WAL rejimida oddiy cp yetarli emas — SQLite online backup API si
+          if node -e '
+            const Database = require("better-sqlite3");
+            const db = new Database(process.argv[1], { readonly: true });
+            db.backup(process.argv[2])
+              .then(() => db.close())
+              .catch((e) => { console.error(e); process.exit(1); });
+          ' "$DB" "$OUT/news.db" 2>"$OUT/backup-err.txt"; then
+            echo "Nusxa: better-sqlite3 backup API"
+          else
+            echo "backup API ishlamadi, fayllarni to'g'ridan-to'g'ri ko'chiramiz:"
+            cat "$OUT/backup-err.txt" || true
+            cp "$DB" "$OUT/news.db"
+            for sfx in -wal -shm; do
+              [ -f "$DB$sfx" ] && cp "$DB$sfx" "$OUT/news.db$sfx"
+            done
+          fi
+          rm -f "$OUT/backup-err.txt"
+
+          # Nusxa butunligini tekshiramiz va tarkibini sanaymiz
+          node -e '
+            const Database = require("better-sqlite3");
+            const db = new Database(process.argv[1], { readonly: true });
+            const out = [];
+            out.push("integrity_check: " + db.pragma("integrity_check")[0].integrity_check);
+            const tables = db
+              .prepare("SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE ? ORDER BY name")
+              .all("table", "sqlite_%");
+            for (const t of tables) {
+              const n = db.prepare(`SELECT count(*) AS c FROM "${t.name}"`).get().c;
+              out.push(`${t.name}: ${n} qator`);
+            }
+            console.log(out.join("\n"));
+          ' "$OUT/news.db" | tee "$OUT/meta.txt"
+
+          {
+            echo "---"
+            echo "olingan vaqt: $(date -u +%FT%TZ)"
+            echo "manba: $(hostname):$DB"
+          } >> "$OUT/meta.txt"
+          EOF
+
+      - name: Bazani yuklab olish
+        run: |
+          set -eu
+          ssh target "tar -czf - -C /tmp/news-backup ." > out/news-db.tar.gz
+          ls -lh out/news-db.tar.gz
+          tar -tzvf out/news-db.tar.gz
+
+      - name: 'Artefakt: baza'
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-db
+          path: out/news-db.tar.gz
+          retention-days: 90
+          if-no-files-found: error
+
+      # --- 2. Server sozlamalari -------------------------------------------
+      # DIQQAT: .env ning QIYMATLARI olinmaydi — faqat kalit nomlari yoziladi,
+      # chunki artefaktni repoga kirishi bor har kim yuklab ola oladi.
+      # Tokenlar kerak bo'lsa ularni server o'chishidan oldin boshqa,
+      # xavfsiz yo'l bilan ko'chirish kerak.
+      - name: Sozlamalarni yig'ish
+        continue-on-error: true
+        run: |
+          set -eu
+          ssh target bash -s <<'EOF'
+          set -u
+          APP_DIR=/var/www/news-bot
+          CFG=/tmp/news-backup-config
+          rm -rf "$CFG"; mkdir -p "$CFG"
+
+          # Faqat kalit nomlari (= belgisigacha), qiymatlarsiz
+          if [ -f "$APP_DIR/.env" ]; then
+            sed -n 's/^\([A-Z0-9_]*\)=.*/\1/p' "$APP_DIR/.env" > "$CFG/env-kalitlar.txt"
+            echo "(qiymatlar ataylab olinmadi)" >> "$CFG/env-kalitlar.txt"
+          fi
+
+          cp /etc/systemd/system/news-*.service "$CFG/" 2>/dev/null || true
+          grep -rl news-bot /etc/nginx/ 2>/dev/null | while read -r f; do
+            cp "$f" "$CFG/nginx-$(basename "$f")" 2>/dev/null || true
+          done
+          git -C "$APP_DIR" log -1 --format='%H %ci %s' > "$CFG/deployed-commit.txt" 2>/dev/null || true
+          ls -la "$CFG"
+          EOF
+          ssh target "tar -czf - -C /tmp/news-backup-config ." > out/news-config.tar.gz
+          ls -lh out/news-config.tar.gz
+
+      - name: 'Artefakt: sozlamalar'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-config
+          path: out/news-config.tar.gz
+          retention-days: 90
+          if-no-files-found: warn
+
+      # --- 3. Audio: hajmi katta, oxirida; xato bo'lsa ham ish to'xtamaydi --
+      - name: Audio fayllarni yuklab olish
+        continue-on-error: true
+        run: |
+          set -eu
+          # Serverda qo'shimcha joy band qilmaslik uchun to'g'ridan-to'g'ri oqim
+          ssh target "tar -cf - -C /var/www/news-bot/data audio" > out/news-audio.tar
+          ls -lh out/news-audio.tar
+
+      - name: 'Artefakt: audio'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-audio
+          path: out/news-audio.tar
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: warn
+
+      - name: Vaqtinchalik fayllarni tozalash
+        if: always()
+        continue-on-error: true
+        run: ssh target "rm -rf /tmp/news-backup /tmp/news-backup-config" || true
+
+      - name: Xulosa
+        if: always()
+        run: |
+          {
+            echo "### Backup natijasi"
+            echo
+            echo '| Fayl | Hajm |'
+            echo '|---|---|'
+            for f in out/*; do
+              [ -e "$f" ] || continue
+              echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+            done
+            echo
+            echo 'Yuklab olish: shu sahifadagi **Artifacts** bo‘limi.'
+          } >> "$GITHUB_STEP_SUMMARY"
