@@ -1,7 +1,7 @@
 # Serverdagi ma'lumotlarni GitHub Actions orqali tortib olish.
 # Natija: Actions -> shu run -> Artifacts bo'limidan yuklab olinadi.
 #
-# rev: 1   <- qayta ishga tushirish kerak bo'lsa shu raqamni oshiring
+# rev: 2   <- qayta ishga tushirish kerak bo'lsa shu raqamni oshiring
 name: Backup
 
 on:
@@ -32,8 +32,13 @@ jobs:
           [ -n "$SSH_USER" ] || { echo "::error::SSH_USER secret yo'q"; exit 1; }
           [ -n "$SSH_KEY" ]  || { echo "::error::SSH_KEY secret yo'q";  exit 1; }
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_backup
+          # CR belgilarini olib tashlaymiz va oxirgi qator uzilmasin
+          printf '%s' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_backup
+          printf '\n' >> ~/.ssh/id_backup
           chmod 600 ~/.ssh/id_backup
+          # Faqat turi va barmoq izi — maxfiy qism chiqmaydi
+          ssh-keygen -l -f ~/.ssh/id_backup || echo "::warning::kalitni o'qib bo'lmadi"
+
           # Host kalitini oldindan olamiz; olinmasa birinchi ulanishda qabul qilinadi
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           {
@@ -45,9 +50,32 @@ jobs:
             echo "  IdentitiesOnly yes"
             echo "  StrictHostKeyChecking accept-new"
             echo "  ServerAliveInterval 30"
+            echo "  ConnectTimeout 20"
+            # Yangi OpenSSH eski ssh-rsa (SHA-1) imzosini o'chirib qo'ygan.
+            # Deploy'dagi appleboy/ssh-action (Go) uni hamon qabul qiladi —
+            # shuning uchun o'sha kalit u yerda ishlab, bu yerda ishlamasligi mumkin.
+            echo "  PubkeyAcceptedAlgorithms +ssh-rsa"
+            echo "  HostKeyAlgorithms +ssh-rsa"
+            # Parol so'ramasin — xato bo'lsa darrov va aniq yiqilsin
+            echo "  PasswordAuthentication no"
+            echo "  KbdInteractiveAuthentication no"
+            echo "  BatchMode yes"
           } > ~/.ssh/config
           chmod 600 ~/.ssh/config
           mkdir -p out
+
+      - name: Ulanishni tekshirish
+        run: |
+          set -eu
+          if ssh target "echo ULANDI: \$(whoami)@\$(hostname)"; then
+            exit 0
+          fi
+          echo "::error::SSH ulanmadi — quyida autentifikatsiya izi"
+          # -vvv kalit qiymatini chiqarmaydi, faqat qaysi usul rad etilganini
+          ssh -vvv target true 2>&1 | grep -Ei \
+            'debug1|Offering|Authentications that can continue|denied|no mutual|sign_and_send|Server accepts key' \
+            | tail -40
+          exit 1
 
       - name: Serverni ko'zdan kechirish
         run: |
