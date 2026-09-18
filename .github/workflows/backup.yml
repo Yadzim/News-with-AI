@@ -1,7 +1,7 @@
 # Serverdagi ma'lumotlarni GitHub Actions orqali tortib olish.
 # Natija: Actions -> shu run -> Artifacts bo'limidan yuklab olinadi.
 #
-# rev: 2   <- qayta ishga tushirish kerak bo'lsa shu raqamni oshiring
+# rev: 3   <- qayta ishga tushirish kerak bo'lsa shu raqamni oshiring
 name: Backup
 
 on:
@@ -64,17 +64,62 @@ jobs:
           chmod 600 ~/.ssh/config
           mkdir -p out
 
-      - name: Ulanishni tekshirish
+      # Ikki mijozni yonma-yon sinaymiz: deploy ishlatadigan appleboy (Go)
+      # va oddiy OpenSSH. Ikkalasi ham faqat o'qiydi, hech narsa o'zgartirmaydi.
+      - name: 'Ulanish testi A — appleboy (deploy bilan bir xil yo''l)'
+        id: probe_appleboy
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 2m
+          script: |
+            echo "ULANDI: $(whoami)@$(hostname)"
+            echo "== disk =="; df -h / /var/www 2>/dev/null | sort -u
+            echo "== faqat-o'qish tekshiruvi =="
+            if touch /var/www/news-bot/.yozish-testi 2>/dev/null; then
+              echo "yozish MUMKIN"; rm -f /var/www/news-bot/.yozish-testi
+            else
+              echo "yozib BO'LMAYDI (disk to'lgan yoki read-only)"
+            fi
+            echo "== data/ =="; ls -la /var/www/news-bot/data 2>&1 | head -20
+            echo "== authorized_keys huquqlari =="
+            ls -ld "$HOME" "$HOME/.ssh" "$HOME/.ssh/authorized_keys" 2>&1
+
+      - name: 'Ulanish testi B — OpenSSH'
+        id: probe_openssh
+        continue-on-error: true
         run: |
           set -eu
           if ssh target "echo ULANDI: \$(whoami)@\$(hostname)"; then
             exit 0
           fi
-          echo "::error::SSH ulanmadi — quyida autentifikatsiya izi"
+          echo "::warning::OpenSSH ulanmadi — quyida autentifikatsiya izi"
           # -vvv kalit qiymatini chiqarmaydi, faqat qaysi usul rad etilganini
           ssh -vvv target true 2>&1 | grep -Ei \
-            'debug1|Offering|Authentications that can continue|denied|no mutual|sign_and_send|Server accepts key' \
-            | tail -40
+            'Offering|Authentications that can continue|denied|no mutual|Server accepts key' \
+            | tail -20
+          exit 1
+
+      - name: Natijani baholash
+        run: |
+          set -eu
+          A='${{ steps.probe_appleboy.outcome }}'
+          B='${{ steps.probe_openssh.outcome }}'
+          echo "appleboy: $A | openssh: $B"
+          if [ "$B" = "success" ]; then
+            echo "OpenSSH ishlayapti — backup davom etadi"
+            exit 0
+          fi
+          if [ "$A" = "success" ]; then
+            echo "::error::Kalit ishlaydi (appleboy ulandi), lekin OpenSSH ulanmadi."
+            echo "::error::Yuqoridagi A testi natijasi serverning holatini ko'rsatadi."
+          else
+            echo "::error::Ikkala mijoz ham ulana olmadi — serverdagi SSH kirish buzilgan."
+          fi
           exit 1
 
       - name: Serverni ko'zdan kechirish
