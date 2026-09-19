@@ -1,0 +1,100 @@
+name: Rescue Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Server IP"
+        required: true
+        default: "169.58.208.186"
+      audio:
+        description: "Audio fayllarni ham olish (true/false)"
+        required: true
+        default: "true"
+
+jobs:
+  rescue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Kalitni o'rnatish
+        env:
+          HOST: ${{ inputs.host }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.RESCUE_SSH_KEY || secrets.SSH_KEY }}" > ~/.ssh/id_rescue
+          chmod 600 ~/.ssh/id_rescue
+          {
+            echo "Host target"
+            echo "  HostName $HOST"
+            echo "  User root"
+            echo "  IdentityFile ~/.ssh/id_rescue"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking no"
+            echo "  UserKnownHostsFile /dev/null"
+            echo "  ServerAliveInterval 20"
+            echo "  ServerAliveCountMax 10"
+            echo "  ConnectTimeout 20"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          ssh target 'echo "SSH OK: $(hostname)"'
+
+      - name: Diagnostika (disk, hajmlar)
+        run: |
+          ssh target 'uptime; echo "=== DISK ==="; df -h; echo "=== INODES ==="; df -i /; echo "=== YOZISH TESTI ==="; (touch /root/.wtest && echo YOZILADI && rm -f /root/.wtest) || echo "READ-ONLY yoki TO@LGAN"; echo "=== HAJMLAR ==="; du -sh /var/www/news-bot/data /var/www/news-bot/data/audio 2>/dev/null; echo "=== BAZA ==="; ls -lh /var/www/news-bot/data/news.db* 2>/dev/null; echo "=== XIZMATLAR ==="; systemctl list-units "news-*" --no-pager --all 2>/dev/null; echo "=== NGINX ==="; ls -l /etc/nginx/sites-enabled/ 2>/dev/null' 2>&1 | tee diag.txt
+
+      - name: Baza + .env + konfiglar (serverga hech narsa yozmaydi)
+        run: |
+          mkdir -p out
+          ssh target 'tar czf - -C /var/www/news-bot --exclude=data/audio data .env 2>/dev/null' > out/core.tar.gz
+          ls -lh out/
+          tar tzf out/core.tar.gz | head -50
+
+      - name: SQL dump (zaxira nusxa, WAL'dan mustaqil)
+        continue-on-error: true
+        run: |
+          ssh target 'command -v sqlite3 >/dev/null && sqlite3 /var/www/news-bot/data/news.db ".dump" || echo "sqlite3 yo@q"' | gzip > out/news-dump.sql.gz
+          ls -lh out/news-dump.sql.gz
+
+      - name: systemd va nginx konfiglari
+        continue-on-error: true
+        run: |
+          ssh target 'tar czf - /etc/systemd/system/news-*.service /etc/nginx/sites-available /etc/nginx/nginx.conf 2>/dev/null' > out/configs.tar.gz
+          ls -lh out/configs.tar.gz
+
+      - name: Audio fayllar
+        if: ${{ inputs.audio == 'true' }}
+        run: |
+          ssh target 'tar czf - -C /var/www/news-bot/data audio 2>/dev/null' > out/audio.tar.gz
+          ls -lh out/audio.tar.gz
+
+      - name: Natijani tekshirish
+        run: |
+          cd out
+          ls -lh
+          mkdir -p check && tar xzf core.tar.gz -C check
+          python3 - <<'PY'
+          import sqlite3, glob, os
+          p = "check/data/news.db"
+          if os.path.exists(p):
+              d = sqlite3.connect(p)
+              tables = [r[0] for r in d.execute("select name from sqlite_master where type='table'")]
+              print("Jadvallar:", tables)
+              for t in tables:
+                  try: print(f"  {t}: {d.execute(f'select count(*) from \"{t}\"').fetchone()[0]}")
+                  except Exception as e: print(f"  {t}: xato {e}")
+          else:
+              print("news.db topilmadi!")
+          PY
+          rm -rf check
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: news-bot-rescue
+          path: |
+            out/*.tar.gz
+            out/*.sql.gz
+            diag.txt
+          retention-days: 30
+          if-no-files-found: warn
