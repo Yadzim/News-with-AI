@@ -1,0 +1,112 @@
+name: Rescue Mount Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Server IP (rescue rejimida)"
+        required: true
+        default: "169.58.208.186"
+      audio:
+        description: "Audio fayllarni ham olish"
+        required: true
+        default: "true"
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SSHPASS: ${{ secrets.RESCUE_PASSWORD }}
+      HOST: ${{ inputs.host }}
+    steps:
+      - name: sshpass o'rnatish
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Ulanishni sinash
+        run: |
+          [ -n "$SSHPASS" ] || { echo "::error::RESCUE_PASSWORD secret yo'q"; exit 1; }
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=25 -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+            root@"$HOST" 'echo "RESCUE OK"; uname -a; cat /etc/os-release | head -2'
+
+      - name: Disklarni ko'rish
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no root@"$HOST" \
+            'lsblk -f; echo "=== BLKID ==="; blkid; echo "=== LVM ==="; (vgscan; lvscan) 2>/dev/null; echo "=== MOUNTS ==="; cat /proc/mounts' 2>&1 | tee disks.txt
+
+      - name: Diskni mount qilib topish
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no root@"$HOST" 'bash -s' <<'EOS' 2>&1 | tee mount.txt
+          set -u
+          (vgchange -ay >/dev/null 2>&1) || true
+          mkdir -p /mnt/probe
+          umount /mnt/probe 2>/dev/null || true
+          FOUND=""
+          for p in $(lsblk -lnpo NAME,TYPE | awk '$2=="part"||$2=="lvm"{print $1}'); do
+            mount -o ro "$p" /mnt/probe 2>/dev/null || continue
+            if [ -d /mnt/probe/var/www/news-bot ]; then FOUND="$p"; break; fi
+            umount /mnt/probe 2>/dev/null || true
+          done
+          if [ -z "$FOUND" ]; then echo "TOPILMADI"; exit 1; fi
+          echo "TOPILDI: $FOUND"
+          df -h /mnt/probe
+          echo "=== data ==="
+          ls -la /mnt/probe/var/www/news-bot/data 2>/dev/null | head -30
+          du -sh /mnt/probe/var/www/news-bot/data /mnt/probe/var/www/news-bot/data/audio 2>/dev/null
+          echo "$FOUND" > /root/.found_part
+          EOS
+
+      - name: Baza + .env + konfiglar
+        run: |
+          mkdir -p out
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no root@"$HOST" \
+            'mount -o ro $(cat /root/.found_part) /mnt/probe 2>/dev/null; tar czf - -C /mnt/probe/var/www/news-bot --exclude=data/audio data .env 2>/dev/null' > out/core.tar.gz
+          ls -lh out/core.tar.gz
+          tar tzf out/core.tar.gz | head -40
+
+      - name: systemd va nginx konfiglari
+        continue-on-error: true
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no root@"$HOST" \
+            'tar czf - -C /mnt/probe etc/systemd/system etc/nginx 2>/dev/null' > out/configs.tar.gz
+          ls -lh out/configs.tar.gz
+
+      - name: Audio fayllar
+        if: ${{ inputs.audio == 'true' }}
+        continue-on-error: true
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no root@"$HOST" \
+            'tar czf - -C /mnt/probe/var/www/news-bot/data audio 2>/dev/null' > out/audio.tar.gz
+          ls -lh out/audio.tar.gz
+
+      - name: Bazani tekshirish
+        run: |
+          cd out && mkdir -p check && tar xzf core.tar.gz -C check
+          python3 - <<'PY'
+          import sqlite3, os
+          p = "check/data/news.db"
+          print("news.db bor:", os.path.exists(p), os.path.getsize(p) if os.path.exists(p) else "")
+          if os.path.exists(p):
+              d = sqlite3.connect(p)
+              for (t,) in d.execute("select name from sqlite_master where type='table'"):
+                  try: print(f"  {t}: {d.execute(f'select count(*) from \"{t}\"').fetchone()[0]}")
+                  except Exception as e: print(f"  {t}: {e}")
+          PY
+          rm -rf check
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: news-bot-rescue-mount
+          path: |
+            out/*.tar.gz
+            disks.txt
+            mount.txt
+          retention-days: 30
+          if-no-files-found: warn
